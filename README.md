@@ -15,7 +15,8 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
 - **Errors in place.** An invalid instruction or invalid bytes turn red, and the
   matching line on the other side shows `???`. The status bar names the first
   failing line and the reason. Other lines keep converting.
-- **Addresses.** Set a base address at the top; each line's address is shown
+- **Addresses.** Set a base address at the top (0x1000 by default); each
+  line's address is shown
   down the left, padded to the processor's pointer size (8 hex digits on x86,
   16 on x64 and ARM64).
 - **Labels.** `name:` defines a label, either on its own line or in front of
