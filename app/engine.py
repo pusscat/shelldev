@@ -194,3 +194,82 @@ def disassemble_detail(arch: Arch, data: bytes, address: int) -> list[tuple[str,
     md = capstone.Cs(*CS_MODES[arch])
     md.skipdata = True
     return [(i.bytes.hex(" "), f"{i.mnemonic} {i.op_str}".strip()) for i in md.disasm(data, address)]
+
+
+def _db(raw: bytes) -> str:
+    return ".byte " + ", ".join(f"0x{b:02x}" for b in raw)
+
+
+def faithful_asm(arch: Arch, data: bytes, address: int = 0x1000) -> list[str]:
+    """Disassembly that reassembles to exactly `data`. Any instruction that
+    doesn't re-encode to its own bytes (inline data such as a command string or
+    an encoder's encoded tail, or an odd encoding) becomes a `.byte` directive
+    of those same bytes. Substituting `.byte` keeps each line's byte length, so
+    every downstream address is preserved and one bad decode in a data region
+    can't cascade into the real instructions after it. Falls back to an
+    all-`.byte` listing, which is always byte-exact."""
+    detail = disassemble_detail(arch, data, address)
+    raws = [bytes.fromhex(h.replace(" ", "")) for h, _ in detail]
+    lines = [t for _, t in detail]
+
+    def matches(result, raw):
+        try:
+            return bool(result.get("ok")) and bytes.fromhex(result["bytes"]) == raw
+        except Exception:
+            return False
+
+    for _ in range(3):
+        try:
+            results = assemble_lines(arch, lines, address)
+        except Exception:
+            break
+        if len(results) != len(lines):
+            break
+        changed = False
+        for i, r in enumerate(results):
+            if not matches(r, raws[i]) and not lines[i].startswith(".byte"):
+                lines[i] = _db(raws[i])
+                changed = True
+        if not changed:
+            try:
+                whole = b"".join(bytes.fromhex(r["bytes"]) for r in results)
+            except Exception:
+                whole = None
+            if whole == data:
+                return lines
+            break
+    return [_db(r) for r in raws]
+
+
+def align_comments(lines: list[str], anchors: list) -> list[str | None]:
+    """Best-effort attach of source comments to disassembled lines.
+
+    `anchors` is an ordered list of (mnemonic, comment) pulled from the original
+    source. We walk the disassembly in order and match each line's mnemonic to
+    the next unused anchor with the same mnemonic (within a small lookahead), so
+    inserted instructions with no source comment are skipped cleanly. Returns a
+    comment (or None) per line; returns all-None when too few anchors line up,
+    to avoid showing misaligned comments."""
+    result: list[str | None] = [None] * len(lines)
+    if not anchors:
+        return result
+    mnems = [(ln.split(" ", 1)[0].lstrip(".").lower() if ln.strip() else "") for ln in lines]
+    anchor_mn = [(a[0] or "").lstrip(".").lower() for a in anchors]
+    j = 0
+    matched = 0
+    window = 4
+    for i, m in enumerate(mnems):
+        if j >= len(anchors):
+            break
+        if not m:
+            continue
+        for k in range(j, min(j + window, len(anchors))):
+            if anchor_mn[k] == m:
+                result[i] = anchors[k][1]
+                j = k + 1
+                matched += 1
+                break
+    # Require at least half the anchors to land, or drop the whole overlay.
+    if matched < max(1, len(anchors) // 2):
+        return [None] * len(lines)
+    return result

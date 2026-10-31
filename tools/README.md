@@ -34,3 +34,14 @@ construction (any instruction that doesn't re-encode to its own bytes becomes a
 `.byte` directive, so inline data can't cause cascading misalignment) run in the
 app at load time against its own Keystone/Capstone engine — so a rebuild is all
 that's needed to pick up a new `msf_catalog.py`.
+
+## Comments
+The generator also scrapes each module's own per-instruction comments from its
+source (`extract_comments`) and stores them as ordered `(mnemonic, comment)`
+anchors. At load time `engine.align_comments` matches those anchors onto the
+disassembly by mnemonic order and attaches them as inline `//` comments (which
+the library page drops into the editor's Comments column). Alignment is
+best-effort: it is skipped entirely for an entry unless at least half the
+anchors line up, so AT&T-syntax (BSD) and dual-branch modules simply show no
+comments rather than misaligned ones. The pwntools catalog does the same with
+shellcraft's `/* ... */` comments (see `pwn_catalog._shellcraft_anchors`).

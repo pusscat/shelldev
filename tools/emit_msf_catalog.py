@@ -6,7 +6,8 @@ Usage:
 
 Default out.py is app/msf_catalog.py next to this tools/ directory. The JSON is
 cleaned (the two "generic" pseudo-encoders are dropped) and vendored verbatim
-into the module; the disassembly / faithful-asm work happens at app runtime.
+into the module; the disassembly, faithful-asm and comment-alignment work all
+happen at app runtime against its own engine.
 """
 import json
 import os
@@ -15,8 +16,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(HERE, os.pardir, "app", "msf_catalog.py")
 
-# The module body, with __BLOB__ replaced by the vendored JSON. The disassembly
-# and faithful-asm logic run at import time against the app's own engine.
+# The module body, with __BLOB__ replaced by the vendored JSON.
 TEMPLATE = r'''"""Library entries vendored from Metasploit Framework payloads, encoders and egghunters.
 
 The bytes here were generated once, offline, through the Metasploit Framework's
@@ -33,23 +33,25 @@ payloads with a dummy command, and egghunters with the tag 'w00t'; those
 immediates are flagged inline in the assembly so they're easy to retarget.
 
 Nothing here runs Metasploit at runtime: the bytes are static and vendored in
-``_DATA`` below. Every entry loads as *editable assembly*. The assembly is built
-so it reassembles to the exact original bytes: any instruction that doesn't
-re-encode to its own bytes (inline data such as a command string or a decoder's
-encoded tail, or an odd encoding) is emitted as a ``.byte`` directive instead.
-That keeps the bytes faithful and stops linear-disassembly misalignment in a
-data region from cascading into the real instructions that follow.
+``_DATA`` below. Every entry loads as *editable assembly* built by
+``engine.faithful_asm`` so it reassembles to the exact original bytes (inline
+data becomes ``.byte`` directives, which stops linear-disassembly misalignment
+from cascading). Each entry also carries the original per-instruction comments
+from the Metasploit source where they can be aligned onto the disassembly; they
+ride along as inline ``//`` comments, which the library page drops into the
+editor's Comments column.
 """
 
 import functools
 import json
 import logging
 
-from .engine import assemble_lines, disassemble_detail
+from .engine import align_comments, disassemble_detail, faithful_asm
 
 log = logging.getLogger("shelldev.msf")
 
-# Vendored generator output. Each item: {kind, refname, os, arch, name, desc, hex}.
+# Vendored generator output. Each item:
+# {kind, refname, os, arch, name, desc, hex, comments:[[mnemonic, comment], ...]}.
 _DATA = json.loads(r"""__BLOB__""")
 
 
@@ -89,58 +91,27 @@ def _dummy_note(refname: str, kind: str) -> str:
     return ""
 
 
-def _annotate(refname: str, kind: str, text: str) -> str:
-    """Flag the dummy LHOST/LPORT/egg-tag immediates inline."""
+def _dummy_tag(refname: str, kind: str, text: str) -> str:
+    """Short label for a dummy immediate on this line, or ''."""
     compact = text.replace(" ", "").lower()
     if kind == "egghunter" and "74303077" in compact:
-        return text + "   // egg tag 'w00t' (dummy)"
+        return "egg tag 'w00t'"
     net = ("reverse" in refname) or ("bind" in refname)
     if net and "reverse" in refname and "100007f" in compact:
-        return text + "   // LHOST 127.0.0.1 (dummy)"
+        return "LHOST 127.0.0.1"
     if net and ("5c11" in compact or "115c" in compact):
-        return text + "   // LPORT 4444 (dummy)"
-    return text
+        return "LPORT 4444"
+    return ""
 
 
-def _db(raw: bytes) -> str:
-    return ".byte " + ", ".join("0x%02x" % b for b in raw)
-
-
-def _faithful_asm(arch: str, detail: list, data: bytes) -> list[str]:
-    """Assembly that reassembles to exactly ``data``. Instructions that don't
-    re-encode to their own bytes become ``.byte`` of those bytes (same length),
-    which preserves every downstream address, so one bad decode can't cascade.
-    Falls back to an all-``.byte`` listing, which always round-trips."""
-    raws = [bytes.fromhex(h.replace(" ", "")) for h, _ in detail]
-    lines = [t for _, t in detail]
-
-    def matches(result, raw):
-        try:
-            return bool(result.get("ok")) and bytes.fromhex(result["bytes"]) == raw
-        except Exception:
-            return False
-
-    for _ in range(3):
-        try:
-            results = assemble_lines(arch, lines, 0x1000)
-        except Exception:
-            break
-        if len(results) != len(lines):
-            break
-        changed = False
-        for i, r in enumerate(results):
-            if not matches(r, raws[i]) and not lines[i].startswith(".byte"):
-                lines[i] = _db(raws[i])
-                changed = True
-        if not changed:
-            try:
-                whole = b"".join(bytes.fromhex(r["bytes"]) for r in results)
-            except Exception:
-                whole = None
-            if whole == data:
-                return lines
-            break
-    return [_db(r) for r in raws]
+def _compose(refname: str, kind: str, text: str, src_comment) -> str:
+    """One asm line with its inline comment: the source comment if we have one,
+    plus a note on any dummy immediate."""
+    tag = _dummy_tag(refname, kind, text)
+    comment = src_comment or ""
+    if tag:
+        comment = (comment + " — " if comment else "") + tag + " (dummy)"
+    return "  " + text + (f"   // {comment}" if comment else "")
 
 
 def _entry(item: dict) -> dict:
@@ -148,9 +119,9 @@ def _entry(item: dict) -> dict:
     kind = item["kind"]
     refname = item["refname"]
     data = bytes.fromhex(item["hex"])
-    detail = disassemble_detail(arch, data, 0x1000)
-    lines = _faithful_asm(arch, detail, data)
-    asm = "\n".join("  " + _annotate(refname, kind, ln) for ln in lines)
+    lines = faithful_asm(arch, data, 0x1000)
+    src = align_comments(lines, item.get("comments") or [])
+    asm = "\n".join(_compose(refname, kind, ln, src[i]) for i, ln in enumerate(lines))
 
     desc = item.get("desc", "") or ""
     note = _dummy_note(refname, kind)

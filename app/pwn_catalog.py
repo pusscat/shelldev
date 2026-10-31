@@ -11,8 +11,9 @@ fails gracefully and only the hand-written entries are served.
 
 import functools
 import logging
+import re
 
-from .engine import disassemble_detail
+from .engine import align_comments, faithful_asm
 
 log = logging.getLogger("shelldev.pwn")
 
@@ -89,15 +90,64 @@ DECODER_SPECS = [
      lambda enc, raw: enc(raw)),  # default avoid = printable 0x21-0x7e
 ]
 
-def _entry(id, name, arch, category, kind, description, code) -> dict:
-    detail = disassemble_detail(arch, code, 0x1000)
+def _shellcraft_anchors(source: str) -> list:
+    """Pull ordered (mnemonic, comment) anchors out of shellcraft asm source.
+    shellcraft writes Intel-syntax asm with /* ... */ comments: standalone lines
+    that describe the block that follows, and inline comments after an
+    instruction. Each instruction's comment is its inline one if present, else
+    the nearest preceding standalone comment."""
+    anchors = []
+    pending = None
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        inline = None
+        m = re.search(r"/\*(.*?)\*/\s*$", line)
+        if m:
+            inline = m.group(1).strip()
+            line = line[: m.start()].strip()
+        if not line:  # a standalone comment line
+            if inline:
+                pending = inline
+            continue
+        if line.endswith(":") or line.startswith("."):  # label / directive
+            continue
+        mnem = line.split()[0].lstrip(".").lower()
+        comment = inline or pending
+        pending = None
+        if comment:
+            anchors.append([mnem, comment])
+    return anchors
+
+
+def _dummy_tag(net: bool, text: str) -> str:
+    compact = text.replace(" ", "").lower()
+    if net and "100007f" in compact:
+        return "LHOST 127.0.0.1"
+    if net and ("5c11" in compact or "115c" in compact):
+        return "LPORT 4444"
+    return ""
+
+
+def _compose(net: bool, text: str, src_comment) -> str:
+    tag = _dummy_tag(net, text)
+    comment = src_comment or ""
+    if tag:
+        comment = (comment + " — " if comment else "") + tag + " (dummy)"
+    return "  " + text + (f"   // {comment}" if comment else "")
+
+
+def _entry(id, name, arch, category, kind, description, code, source=None, net=False) -> dict:
+    lines = faithful_asm(arch, code, 0x1000)
+    anchors = _shellcraft_anchors(source) if source else []
+    cmts = align_comments(lines, anchors)
+    asm = "\n".join(_compose(net, ln, cmts[i]) for i, ln in enumerate(lines))
     return {
         "id": id, "name": name, "arch": arch, "os": "linux",
         "category": category, "kind": kind, "source": "pwntools",
         "description": description, "address": 0x1000, "size": len(code),
-        "load": "bytes",
-        "bytes_lines": [hexs for hexs, _ in detail],
-        "preview": "\n".join(text for _, text in detail),
+        "load": "asm", "asm": asm, "preview": asm,
     }
 
 
@@ -116,12 +166,14 @@ def _build() -> list[dict]:
                 context.clear()
                 context.arch = pwn_arch
                 context.os = "linux"
-                code = asm(factory(linux))
+                source = factory(linux)
+                code = asm(source)
             except Exception as e:  # one payload failing shouldn't drop the rest
                 log.warning("pwntools %s/%s failed: %s", arch, suffix, e)
                 continue
             entries.append(_entry(f"pwn-{arch}-{suffix}", name, arch, category,
-                                  "payload", description, code))
+                                  "payload", description, code, source=source,
+                                  net=suffix in ("reverse", "bind")))
 
     # Decoder stubs: encode execve("/bin/sh") with each pwntools encoder.
     for arch, pwn_arch, modpath, slug, name, desc, call in DECODER_SPECS:

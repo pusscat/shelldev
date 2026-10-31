@@ -36,6 +36,30 @@ def cmd_for(os)
   os == 'windows' ? 'cmd.exe' : '/bin/sh'
 end
 
+# Extract ordered (mnemonic, comment) anchors from a module's source. Handles
+# both module styles: asm heredocs ("  mov eax,0x5    ; open() syscall") and
+# byte-string payloads ('"\xb0\x66"   #   mov al,0x66 (sys_socketcall)'). The
+# mnemonic lets us align these onto our disassembly later; dynamic blocks with
+# no per-line comment (e.g. a string-push loop) simply contribute no anchor.
+def extract_comments(path)
+  return [] unless path && File.file?(path)
+  src = (File.read(path) rescue nil) or return []
+  body = (m = src.match(/def generate\b.*?\n(.*)\n\s*end\b/m)) ? m[1] : src
+  out = []
+  body.each_line do |ln|
+    if ln =~ /^\s*[a-zA-Z][\w.]*\b[^;"]*;\s*(\S.*?)\s*$/   # asm line ; comment
+      comment = $1
+      mnem = ln.strip[/^[a-zA-Z][\w.]*/]
+      out << [mnem.downcase, comment] if mnem
+    elsif ln =~ /"(?:\\x[0-9a-fA-F]{2})+"/ && ln =~ /#\s*(\S.*?)\s*$/  # bytes # comment
+      comment = $1
+      mnem = comment[/^[a-zA-Z][\w.]*/]
+      out << [mnem.downcase, comment] if mnem
+    end
+  end
+  out
+end
+
 def fill_datastore(mod, os)
   common = {
     'LHOST' => '127.0.0.1', 'LPORT' => 4444, 'RHOST' => '127.0.0.1', 'RPORT' => 4444,
@@ -82,7 +106,7 @@ framework.payloads.each_module do |name, _|
     entries << {
       'kind' => 'payload', 'refname' => name, 'os' => os, 'arch' => key,
       'name' => mod.name.to_s, 'desc' => mod.description.to_s.split.join(' '),
-      'hex' => raw.unpack1('H*'),
+      'hex' => raw.unpack1('H*'), 'comments' => extract_comments(mod.file_path),
     }
     pay_ok += 1
     $stderr.puts "[+] payload #{name} (#{key}/#{os}) #{raw.length}b"
@@ -120,7 +144,7 @@ framework.encoders.each_module do |name, _|
     entries << {
       'kind' => 'decoder', 'refname' => name, 'os' => 'linux', 'arch' => key,
       'name' => enc.name.to_s, 'desc' => enc.description.to_s.split.join(' '),
-      'hex' => raw.unpack1('H*'),
+      'hex' => raw.unpack1('H*'), 'comments' => extract_comments(enc.file_path),
     }
     enc_ok += 1
     $stderr.puts "[+] encoder #{name} (#{key}) #{raw.length}b"
