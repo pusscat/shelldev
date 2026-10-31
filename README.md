@@ -97,12 +97,15 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
     by the payload families in Metasploit and shell-storm (not copied
     verbatim); these load as editable assembly. Network and XOR stubs use
     placeholder constants (127.0.0.1:4444, key 0xaa) meant to be edited.
-  - **pwntools-generated** entries (`sh`, `exit`, `cat`, reverse and bind
-    shells, per architecture), produced at runtime by pwntools' `shellcraft`.
-    These load as **raw bytes**: the editor disassembles them, so you see the
-    tool's own disassembly of the real payload. They need pwntools and its
-    assemblers in the image (see below); when those are missing they are
-    simply left out.
+  - **pwntools-generated** entries, loaded as **raw bytes** (the editor
+    disassembles them, so you see the tool's own disassembly of the real
+    payload): `sh`, `exit`, `cat`, reverse and bind shells per architecture
+    from `shellcraft`, plus **decoder stubs** from pwntools' encoders — the
+    i386 XOR and delta decoders and the amd64 delta decoder, each wrapping a
+    null-free execve("/bin/sh"). (pwntools' other encoders target 32-bit ARM
+    and MIPS, which the editor has no mode for, or need a pointer register, so
+    they're not included.) These need pwntools and its assemblers in the image
+    (see below); when those are missing they are simply left out.
 
 ### Syntax notes
 
