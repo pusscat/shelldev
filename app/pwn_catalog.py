@@ -32,18 +32,27 @@ SPECS = [
 ]
 
 # Decoder stubs: pwntools encoders that wrap a payload (here execve /bin/sh)
-# in a self-decoding, null-free stub. Only encoders whose architecture the
-# editor can disassemble are included; pwntools' other encoders target 32-bit
-# ARM and MIPS (no editor mode) or need a pointer register (ascii_shellcode).
-# (our arch, pwntools arch, encoder module, label, description)
+# in a self-decoding, null-free stub, all self-contained (no pre-set register).
+# Only encoders whose architecture the editor can disassemble are included;
+# pwntools' other encoders target 32-bit ARM and MIPS, which the editor has no
+# mode for.
+# (our arch, pwntools arch, encoder module, slug, name, description, call)
 DECODER_SPECS = [
-    ("x86", "i386", "pwnlib.encoders.i386.xor", "XOR",
+    ("x86", "i386", "pwnlib.encoders.i386.xor", "xor", "XOR decoder → /bin/sh",
      'pwntools i386 XOR decoder stub around execve("/bin/sh"); self-locating '
-     "(FPU GetPC) and null-free."),
-    ("x86", "i386", "pwnlib.encoders.i386.delta", "delta",
-     'pwntools i386 delta decoder stub around execve("/bin/sh"); null-free.'),
-    ("x64", "amd64", "pwnlib.encoders.amd64.delta", "delta",
-     'pwntools amd64 delta decoder stub around execve("/bin/sh"); null-free.'),
+     "(FPU GetPC) and null-free.",
+     lambda enc, raw: enc(raw, b"\x00")),
+    ("x86", "i386", "pwnlib.encoders.i386.delta", "delta", "delta decoder → /bin/sh",
+     'pwntools i386 delta decoder stub around execve("/bin/sh"); null-free.',
+     lambda enc, raw: enc(raw, b"\x00")),
+    ("x64", "amd64", "pwnlib.encoders.amd64.delta", "delta", "delta decoder → /bin/sh",
+     'pwntools amd64 delta decoder stub around execve("/bin/sh"); null-free.',
+     lambda enc, raw: enc(raw, b"\x00")),
+    ("x86", "i386", "pwnlib.encoders.i386.ascii_shellcode", "ascii", "ASCII decoder → /bin/sh",
+     'pwntools i386 ASCII decoder around execve("/bin/sh"): the whole payload '
+     "is printable ASCII and null-free, rebuilt on the stack with sub/push "
+     "(self-contained, no register setup needed).",
+     lambda enc, raw: enc(raw)),  # default avoid = printable 0x21-0x7e
 ]
 
 _DESCRIPTIONS = {
@@ -92,19 +101,18 @@ def _build() -> list[dict]:
                                   "payload", _DESCRIPTIONS[suffix], code))
 
     # Decoder stubs: encode execve("/bin/sh") with each pwntools encoder.
-    for arch, pwn_arch, modpath, label, desc in DECODER_SPECS:
+    for arch, pwn_arch, modpath, slug, name, desc, call in DECODER_SPECS:
         try:
             encode = importlib.import_module(modpath).encode
             context.clear()
             context.arch = pwn_arch
             context.os = "linux"
             raw = asm(getattr(shellcraft, pwn_arch).linux.sh())
-            code = encode(raw, b"\x00")  # avoid null bytes
+            code = call(encode, raw)
         except Exception as e:
-            log.warning("pwntools decoder %s/%s failed: %s", arch, label, e)
+            log.warning("pwntools decoder %s/%s failed: %s", arch, slug, e)
             continue
-        entries.append(_entry(f"pwn-dec-{arch}-{label.lower()}",
-                              f"{label} decoder → /bin/sh", arch,
+        entries.append(_entry(f"pwn-dec-{arch}-{slug}", name, arch,
                               "decoder", "decoder", desc, code))
     return entries
 

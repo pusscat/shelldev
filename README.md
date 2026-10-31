@@ -101,11 +101,11 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
     disassembles them, so you see the tool's own disassembly of the real
     payload): `sh`, `exit`, `cat`, reverse and bind shells per architecture
     from `shellcraft`, plus **decoder stubs** from pwntools' encoders — the
-    i386 XOR and delta decoders and the amd64 delta decoder, each wrapping a
-    null-free execve("/bin/sh"). (pwntools' other encoders target 32-bit ARM
-    and MIPS, which the editor has no mode for, or need a pointer register, so
-    they're not included.) These need pwntools and its assemblers in the image
-    (see below); when those are missing they are simply left out.
+    i386 XOR, delta and ASCII (printable) decoders and the amd64 delta decoder,
+    each wrapping a null-free execve("/bin/sh") in a self-contained stub.
+    (pwntools' remaining encoders target 32-bit ARM and MIPS, which the editor
+    has no mode for.) These need pwntools and its assemblers in the image (see
+    below); when those are missing they are simply left out.
 
 ### Syntax notes
 
