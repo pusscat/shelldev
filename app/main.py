@@ -21,6 +21,15 @@ app = FastAPI(title="shelldev")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.on_event("startup")
+def _warm_library() -> None:
+    # Building the pwntools entries takes a couple of seconds; do it in the
+    # background at startup so the first /library request is served warm.
+    import threading
+
+    threading.Thread(target=library.catalog, daemon=True).start()
+
+
 class LinesRequest(BaseModel):
     arch: Arch
     lines: list[str] = Field(max_length=MAX_LINES)

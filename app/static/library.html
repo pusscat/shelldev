@@ -114,6 +114,7 @@
       <tbody id="rows"></tbody>
     </table>
     <div id="empty" class="empty" hidden>No entries match.</div>
+    <div id="loading" class="empty">Loading library…</div>
   </div>
   <div class="detail" id="detail">
     <p class="placeholder">Select an entry to preview it, then load it into the editor.</p>
@@ -259,14 +260,18 @@ $("reset").addEventListener("click", () => {
 
 (async () => {
   try {
+    // The first request after a server start builds the pwntools entries and
+    // can take a couple of seconds, so a loading state shows until it lands.
     const res = await fetch("/api/library");
     entries = (await res.json()).entries;
   } catch (e) {
+    $("loading").hidden = true;
     $("rows").innerHTML = "";
     $("empty").hidden = false;
     $("empty").textContent = "Couldn't load the library.";
     return;
   }
+  $("loading").hidden = true;
   fillFilter("f-arch", "arch");
   fillFilter("f-os", "os");
   fillFilter("f-category", "category");
