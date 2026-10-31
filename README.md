@@ -32,6 +32,14 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   an indent joins the line onto the previous one. Assembly generated from
   bytes is indented the same way.
 
+- **Byte highlighting.** The bar under the header takes a set of bytes to
+  watch for (for example, bad characters for shellcode). Every occurrence in
+  the bytes pane is shown in bold, underlined yellow, and the status bar
+  counts them. Entries can be printable ASCII characters, `\xNN` or `0xNN`;
+  spaces and commas separate entries, so use `\x20` for a space, `\x2c` for a
+  comma and `\\` for a backslash. The parsed bytes are listed next to the
+  bar, and the entry is remembered in the browser.
+
 ### Syntax notes
 
 - Comments start with `//` on every architecture.

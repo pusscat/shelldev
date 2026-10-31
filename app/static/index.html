@@ -8,7 +8,7 @@
   :root {
     color-scheme: dark;
     --bg: #14161a; --panel: #1c1f25; --panel-focus: #1f232a; --border: #2c313a;
-    --text: #d7dae0; --muted: #7f8794; --error: #ff7b72; --ok: #7ee787; --label: #e5c07b;
+    --text: #d7dae0; --muted: #7f8794; --error: #ff7b72; --ok: #7ee787; --label: #e5c07b; --hit: #ffd43b;
     --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
@@ -80,6 +80,21 @@
   }
   footer.error { color: var(--error); }
   footer.ok { color: var(--ok); }
+
+  .bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 8px 16px; border-bottom: 1px solid var(--border);
+  }
+  .bar input { flex: 1 1 20em; width: auto; min-width: 0; }
+  .bar input.invalid { border-color: var(--error); }
+  #hl-parsed { font: 12px var(--mono); color: var(--muted); }
+  #hl-parsed.error { color: var(--error); }
+  /* Faux bold via text-shadow: real bold can change glyph widths and break
+     the overlay's alignment with the textarea. */
+  .hit {
+    color: var(--hit); text-decoration: underline;
+    text-shadow: .45px 0 0 currentColor, -.45px 0 0 currentColor;
+  }
 </style>
 </head>
 <body>
@@ -95,6 +110,13 @@
   <label>Base address <input id="address" value="0x0" spellcheck="false"></label>
   <span class="hint">// comments · ; separates instructions</span>
 </header>
+<div class="bar">
+  <label for="hl">Highlight bytes</label>
+  <input id="hl" spellcheck="false" autocomplete="off"
+         placeholder="e.g. \x00\x0a 0x0d /bin/sh"
+         title="ASCII characters, \xNN or 0xNN. Spaces and commas separate entries; use \x20 for a space, \x2c for a comma, \\ for a backslash.">
+  <span id="hl-parsed"></span>
+</div>
 <main>
   <section class="pane">
     <h2>Assembly</h2>
@@ -200,13 +222,66 @@ function highlightAsm(line, refPattern) {
   return html;
 }
 
+// --- byte highlighting ---------------------------------------------------
+
+// Bytes the user asked to highlight in the bytes pane.
+let highlight = new Set();
+
+// Parse the highlight bar: ASCII characters, \xNN and 0xNN. Whitespace and
+// commas separate entries. Returns {bytes: Set} or {error}.
+function parseByteList(s) {
+  const bytes = new Set();
+  let i = 0, m;
+  while (i < s.length) {
+    const rest = s.slice(i);
+    if ((m = /^\\x([0-9a-f]{2})/i.exec(rest)) || (m = /^0x([0-9a-f]{1,2})(?![0-9a-f])/i.exec(rest))) {
+      bytes.add(parseInt(m[1], 16));
+      i += m[0].length;
+    } else if (/^0x[0-9a-f]/i.test(rest)) {
+      return { error: "0x takes one or two hex digits" };
+    } else if (rest.startsWith("\\\\")) {
+      bytes.add(0x5c);
+      i += 2;
+    } else if (rest[0] === "\\") {
+      return { error: "After \\ use xNN, or \\\\ for a backslash" };
+    } else if (/[\s,]/.test(rest[0])) {
+      i++;
+    } else {
+      const c = s.charCodeAt(i);
+      if (c < 0x20 || c > 0x7e) return { error: `"${rest[0]}" is not printable ASCII` };
+      bytes.add(c);
+      i++;
+    }
+  }
+  return { bytes };
+}
+
+// One byte in the bytes pane, in any accepted form: "48", "0x48" or "\x48".
+const BYTE_TOKEN = /(?:0x|\\x)?([0-9a-f]{2})/gi;
+
+function lineBytes(line) {
+  return [...stripComment(line)[0].matchAll(BYTE_TOKEN)].map((m) => parseInt(m[1], 16));
+}
+
+function highlightBytes(line) {
+  const [code, comment] = stripComment(line);
+  let out = "", last = 0;
+  for (const m of code.matchAll(BYTE_TOKEN)) {
+    if (!highlight.has(parseInt(m[1], 16))) continue;
+    out += escapeHtml(code.slice(last, m.index)) + `<span class="hit">${escapeHtml(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + escapeHtml(code.slice(last)) + escapeHtml(comment);
+}
+
 function render(pane) {
   const lines = pane.input.value.split("\n");
   const refs = pane === panes.asm ? labelRefPattern(definedLabels(lines)) : null;
   pane.view.innerHTML = lines.map((line, i) => {
     const state = pane.states[i];
     if (state && state !== "ok") return `<span class="${state}">${escapeHtml(line)}</span>`;
-    return pane === panes.asm ? highlightAsm(line, refs) : escapeHtml(line);
+    if (pane === panes.asm) return highlightAsm(line, refs);
+    return highlight.size ? highlightBytes(line) : escapeHtml(line);
   }).join("\n") + "\n";
   syncScroll(pane);
 }
@@ -283,17 +358,22 @@ async function convert() {
   }
 }
 
+// Results of the last conversion, so the status can be redrawn when the
+// highlight bar changes.
+let lastLines = [];
+
 function report(lines) {
+  lastLines = lines;
   const errors = lines.map((l, i) => [i + 1, l]).filter(([, l]) => !l.ok);
-  const bytes = panes.hex.input.value.split("\n")
-    .filter((_, i) => lines[i]?.ok)
-    .join(" ").split(/\s+/).filter(Boolean).length;
+  const bytes = panes.hex.input.value.split("\n").filter((_, i) => lines[i]?.ok).flatMap(lineBytes);
   if (errors.length) {
     const [line, first] = errors[0];
     const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : "";
     setStatus(`Line ${line}: ${first.error}${more}`, "error");
   } else {
-    setStatus(`${bytes} byte${bytes === 1 ? "" : "s"}`, "ok");
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    const hits = bytes.filter((b) => highlight.has(b)).length;
+    setStatus(plural(bytes.length, "byte") + (highlight.size ? ` · ${plural(hits, "highlighted byte")}` : ""), "ok");
   }
 }
 
@@ -396,6 +476,29 @@ panes.asm.input.addEventListener("keydown", (e) => {
 
 archEl.addEventListener("change", convert);
 addrEl.addEventListener("input", schedule);
+
+const hlEl = $("hl"), hlParsedEl = $("hl-parsed");
+const HL_KEY = "shelldev.highlight";
+
+function updateHighlight() {
+  const r = parseByteList(hlEl.value);
+  hlEl.classList.toggle("invalid", !!r.error);
+  hlParsedEl.classList.toggle("error", !!r.error);
+  if (r.error) {
+    hlParsedEl.textContent = r.error;
+    return; // keep the last valid set while the user fixes the input
+  }
+  highlight = r.bytes;
+  hlParsedEl.textContent = [...highlight].sort((a, b) => a - b)
+    .map((b) => b.toString(16).padStart(2, "0")).join(" ");
+  try { localStorage.setItem(HL_KEY, hlEl.value); } catch {}
+  render(panes.hex);
+  if (lastLines.length) report(lastLines);
+}
+
+try { hlEl.value = localStorage.getItem(HL_KEY) || ""; } catch {}
+hlEl.addEventListener("input", updateHighlight);
+updateHighlight();
 
 render(panes.asm);
 convert();
