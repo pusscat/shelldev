@@ -26,10 +26,11 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   `mov rax, label`) a label stands for its absolute address. Branches pick the
   shortest encoding that reaches the target.
 - **Label highlighting and auto-indent.** Label definitions are colored, as
-  are references to them, and comments are dimmed. Pressing Enter after a
-  label indents the next line; other lines keep the current indent. Typing
-  `:` after a single word on an indented line moves it back to the left edge
-  as a label. Assembly generated from bytes is indented the same way.
+  are references to them, and comments are dimmed. Indentation is automatic:
+  after every edit, lines that start with a label are moved to the left edge
+  and all other non-blank lines are indented by two spaces. Backspace inside
+  an indent joins the line onto the previous one. Assembly generated from
+  bytes is indented the same way.
 
 ### Syntax notes
 
