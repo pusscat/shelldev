@@ -813,8 +813,10 @@ function loadPending() {
   if (Number.isSafeInteger(pending.address) && pending.address >= 0) {
     addrEl.value = "0x" + pending.address.toString(16);
   }
-  panes.asm.input.value = pending.asm;
-  commentsEl.value = "";
+  // Move the entry's inline comments into the Comments column, like import.
+  const { codes, notes } = splitImported(pending.asm.split("\n"));
+  panes.asm.input.value = codes.join("\n");
+  commentsEl.value = notes.join("\n");
   updateExportLabel();
   if (pending.name) setStatus(`Loaded "${pending.name}" from the library`, "ok");
   return true;
