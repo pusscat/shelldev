@@ -93,16 +93,20 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   (payload or decoder). Each entry shows a preview and its assembled size;
   "Load in editor" sends it back to the editor with the right architecture and
   base address. There are two sources of entries:
-  - **Hand-written** reference implementations that assemble in-tool, inspired
-    by the payload families in Metasploit and shell-storm (not copied
-    verbatim); these load as editable assembly. Network and XOR stubs use
-    placeholder constants (127.0.0.1:4444, key 0xaa) meant to be edited.
-  - **pwntools-generated** entries, loaded as **raw bytes** (the editor
+  - A few **hand-written** reference implementations inspired by Metasploit
+    (a reverse shell and a XOR decoder stub for x86 and x64); these load as
+    editable assembly and use placeholder constants (127.0.0.1:4444, key 0xaa)
+    meant to be edited.
+  - The bulk are **pwntools-generated**, loaded as **raw bytes** (the editor
     disassembles them, so you see the tool's own disassembly of the real
-    payload): `sh`, `exit`, `cat`, reverse and bind shells per architecture
-    from `shellcraft`, plus **decoder stubs** from pwntools' encoders — the
-    i386 XOR, delta and ASCII (printable) decoders and the amd64 delta decoder,
-    each wrapping a null-free execve("/bin/sh") in a self-contained stub.
+    payload). This covers all of pwntools' complete standalone payloads per
+    architecture — `sh`, `exit`, `dupsh`, `findpeersh`, reverse and bind
+    shells, `bindsh`, `cat`, `cat2`, `readfile`, `echo`, `forkbomb`,
+    `forkexit`, `killparent` — wherever pwntools provides them (so some are
+    x86/x64 only). pwntools' ~500 one-per-syscall wrappers are left out, since
+    they're primitives, not payloads. Also included are **decoder stubs** from
+    pwntools' encoders — the i386 XOR, delta and ASCII (printable) decoders and
+    the amd64 delta decoder, each wrapping a null-free execve("/bin/sh").
     (pwntools' remaining encoders target 32-bit ARM and MIPS, which the editor
     has no mode for.) These need pwntools and its assemblers in the image (see
     below); when those are missing they are simply left out.
