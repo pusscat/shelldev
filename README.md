@@ -60,6 +60,27 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
     comment.
 
   Export is refused while any line has an error.
+- **Import.** Import… opens a dialog that reads the same formats back, from a
+  file or pasted text. You must pick the architecture (it is never guessed);
+  the format is filled in from the file extension, and the base address
+  defaults to the current one. Import replaces the assembly pane (Ctrl+Z
+  brings the old code back).
+  - **Raw binary** is disassembled, one instruction per line.
+  - **Python / Ruby**: the bytes of every string literal are collected. If
+    each line of bytes has a comment and those comments assemble to exactly
+    the same bytes (as in files this app exports), the comments become the
+    code, so labels and comments come back. Otherwise the bytes are
+    disassembled (this is what happens with msfvenom output, for example).
+  - **NASM** is translated to the editor's syntax (`dword [x]` →
+    `dword ptr [x]`, `[rel x]` → `[rip + x]`, `db`/`dw`/`dd`/`dq` → bytes,
+    small `times` counts expanded; `BITS`, `section`, `global` etc. are
+    dropped). A `db` line whose comment is an instruction producing the same
+    bytes becomes that instruction again. NASM itself is not run on imported
+    files, since NASM can read other files on the server.
+  - **GNU as** (ARM64) is taken mostly as-is; `.inst` words are decoded back
+    into instructions.
+
+  Anything that can't be translated stays in the editor as a red line.
 
 ### Syntax notes
 
@@ -74,13 +95,14 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
 ## How it works
 
 A small [FastAPI](https://fastapi.tiangolo.com/) server, run by Uvicorn,
-serves a single static page and three endpoints:
+serves a single static page and four endpoints:
 
 | Endpoint | Input | Output |
 | --- | --- | --- |
 | `POST /api/assemble` | `{arch, address, lines: [assembly...]}` | per line: `address`, `ok`, `bytes` or `error` |
 | `POST /api/disassemble` | `{arch, address, lines: [hex...]}` | per line: `address`, `ok`, `text` or `error` |
 | `POST /api/export` | `{arch, address, lines: [assembly...], format}` | the file as a download; `format` is `bin`, `asm`, `python` or `ruby` |
+| `POST /api/import` | `{arch, address, format, text}` or `{..., data_base64}` | `{lines, notes}`; `format` is `bin`, `nasm`, `gas`, `python` or `ruby` |
 
 `arch` is `x86`, `x64` or `arm64`. Assembly uses
 [Keystone](https://www.keystone-engine.org/); disassembly uses
@@ -88,8 +110,10 @@ serves a single static page and three endpoints:
 
 ```
 app/
-  main.py            API and line-by-line assemble/disassemble
+  main.py            web routes
+  engine.py          line-by-line assemble/disassemble
   export.py          export formats, including the NASM check
+  importer.py        import formats
   static/index.html  the whole frontend (no build step)
 Dockerfile
 docker-compose.yml

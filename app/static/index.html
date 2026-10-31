@@ -36,6 +36,30 @@
   button:hover { border-color: var(--muted); }
   button:disabled { opacity: .6; cursor: progress; }
   .export { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .export .sep { width: 1px; height: 20px; background: var(--border); margin: 0 6px; }
+  button.primary { background: #2d4f73; border-color: #3d6a99; }
+  button.primary:hover { border-color: var(--text); }
+
+  dialog {
+    width: min(36em, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto;
+    padding: 0; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--panel); color: var(--text);
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, .55); }
+  dialog form { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px; }
+  dialog h2 { margin: 0; font-size: 16px; }
+  dialog .field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+  dialog .field input:not([type=file]), dialog .field select { width: 100%; }
+  dialog input[type=radio], dialog input[type=file] { width: auto; padding: 0; border: 0; background: none; }
+  dialog textarea {
+    resize: vertical; min-height: 6em; scrollbar-color: var(--border) transparent; padding: 8px; border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); color: var(--text); font: 12px/1.4 var(--mono); white-space: pre;
+  }
+  dialog fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  dialog legend { color: var(--muted); padding: 0; margin-bottom: 6px; }
+  dialog fieldset label { color: var(--text); }
+  dialog .error { color: var(--error); margin: 0; font: 12px var(--mono); }
+  dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
   .hint { font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: auto; }
   main {
     flex: 1; min-height: 0;
@@ -116,6 +140,8 @@
   </label>
   <label>Base address <input id="address" value="0x0" spellcheck="false"></label>
   <div class="export">
+    <button id="import-open">Import…</button>
+    <span class="sep" aria-hidden="true"></span>
     <label for="export-format">Export</label>
     <select id="export-format">
       <option value="bin">Raw binary (.bin)</option>
@@ -162,6 +188,41 @@ loop:
   </section>
 </main>
 <footer id="status"></footer>
+<dialog id="import-dialog" aria-labelledby="import-title">
+  <form id="import-form">
+    <h2 id="import-title">Import</h2>
+    <label class="field">File
+      <input type="file" id="import-file">
+    </label>
+    <label class="field">Or paste the file's contents
+      <textarea id="import-text" spellcheck="false" placeholder='buf = b"\x48\x31\xff"'></textarea>
+    </label>
+    <label class="field">Format
+      <select id="import-format" required>
+        <option value="">Choose a format…</option>
+        <option value="bin">Raw binary (.bin)</option>
+        <option value="nasm">NASM (.asm)</option>
+        <option value="gas">GNU as (.s)</option>
+        <option value="python">Python string (.py)</option>
+        <option value="ruby">Ruby string (.rb)</option>
+      </select>
+    </label>
+    <fieldset>
+      <legend>Architecture</legend>
+      <label><input type="radio" name="import-arch" value="x86" required> x86 (32-bit)</label>
+      <label><input type="radio" name="import-arch" value="x64"> x64</label>
+      <label><input type="radio" name="import-arch" value="arm64"> ARM64</label>
+    </fieldset>
+    <label class="field">Base address
+      <input id="import-address" spellcheck="false">
+    </label>
+    <p id="import-error" class="error" hidden></p>
+    <div class="actions">
+      <button type="button" id="import-cancel">Cancel</button>
+      <button type="submit" class="primary" id="import-submit">Import</button>
+    </div>
+  </form>
+</dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const archEl = $("arch"), addrEl = $("address"), statusEl = $("status"), gutterEl = $("gutter");
@@ -531,6 +592,100 @@ async function downloadExport() {
 }
 
 exportBtn.addEventListener("click", downloadExport);
+
+// --- import ---------------------------------------------------------------
+
+const importDialog = $("import-dialog"), importForm = $("import-form");
+const importFileEl = $("import-file"), importTextEl = $("import-text"), importFormatEl = $("import-format");
+const importAddrEl = $("import-address"), importErrorEl = $("import-error"), importSubmit = $("import-submit");
+const IMPORT_FORMATS = { bin: "bin", asm: "nasm", nasm: "nasm", s: "gas", py: "python", rb: "ruby" };
+
+function importError(message) {
+  importErrorEl.textContent = message;
+  importErrorEl.hidden = !message;
+}
+
+$("import-open").addEventListener("click", () => {
+  importForm.reset();
+  importError("");
+  importAddrEl.value = addrEl.value;
+  importDialog.showModal();
+});
+$("import-cancel").addEventListener("click", () => importDialog.close());
+
+// A file and pasted text are alternatives; picking one clears the other.
+importFileEl.addEventListener("change", () => {
+  importTextEl.value = "";
+  const ext = importFileEl.files[0]?.name.split(".").pop().toLowerCase();
+  if (IMPORT_FORMATS[ext]) importFormatEl.value = IMPORT_FORMATS[ext];
+});
+importTextEl.addEventListener("input", () => { importFileEl.value = ""; });
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+importForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  importError("");
+  const arch = importForm.elements["import-arch"].value;
+  const format = importFormatEl.value;
+  const file = importFileEl.files[0];
+  const saved = addrEl.value;
+  addrEl.value = importAddrEl.value;
+  const address = parseAddress();
+  addrEl.value = saved;
+  if (!arch) return importError("Choose an architecture.");
+  if (!format) return importError("Choose a format.");
+  if (address === null) return importError("Invalid base address.");
+  if (!file && !importTextEl.value.trim()) return importError("Choose a file or paste its contents.");
+  if (format === "bin" && !file) return importError("Raw binary needs a file.");
+
+  const body = { arch, address, format };
+  try {
+    if (format === "bin") body.data_base64 = toBase64(await file.arrayBuffer());
+    else body.text = file ? await file.text() : importTextEl.value;
+  } catch (err) {
+    return importError(`Couldn't read the file: ${err.message}`);
+  }
+
+  importSubmit.disabled = true;
+  try {
+    const res = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const r = await res.json().catch(() => ({}));
+    if (!res.ok) return importError(r.error || r.detail?.[0]?.msg || `Server error ${res.status}`);
+    importDialog.close();
+    await applyImport(arch, address, r.lines, r.notes || []);
+  } catch (err) {
+    importError(err.message);
+  } finally {
+    importSubmit.disabled = false;
+  }
+});
+
+async function applyImport(arch, address, lines, notes) {
+  archEl.value = arch;
+  addrEl.value = "0x" + address.toString(16);
+  updateExportLabel();
+  // Replace the assembly as if typed, so Ctrl+Z brings the old code back.
+  const el = panes.asm.input;
+  el.focus();
+  el.setSelectionRange(0, el.value.length);
+  insertText(el, lines.join("\n"));
+  el.setSelectionRange(0, 0);
+  el.scrollTop = 0;
+  clearTimeout(timer);
+  source = "asm";
+  await convert();
+  if (notes.length) setStatus(`${statusEl.textContent} · ${notes.join(" ")}`, statusEl.className);
+}
 archEl.addEventListener("change", updateExportLabel);
 updateExportLabel();
 
