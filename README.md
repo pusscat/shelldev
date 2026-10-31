@@ -81,6 +81,15 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
     into instructions.
 
   Anything that can't be translated stays in the editor as a red line.
+- **Library.** The Library button opens a reference page of well-known
+  shellcode and decoder stubs (`/library`). Search by name, and filter or sort
+  by architecture, OS, function (exec, exit, reverse shell, decoder…) and type
+  (payload or decoder). Each entry shows a preview and its assembled size;
+  "Load in editor" sends it back to the editor with the right architecture and
+  base address. The entries are hand-written reference implementations that
+  assemble in-tool, inspired by the payload families in Metasploit, pwntools
+  and shell-storm (not copied verbatim); network and XOR stubs use placeholder
+  constants (127.0.0.1:4444, key 0xaa) meant to be edited.
 
 ### Syntax notes
 
@@ -95,7 +104,7 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
 ## How it works
 
 A small [FastAPI](https://fastapi.tiangolo.com/) server, run by Uvicorn,
-serves a single static page and four endpoints:
+serves two static pages (the editor and the library) and these endpoints:
 
 | Endpoint | Input | Output |
 | --- | --- | --- |
@@ -103,6 +112,7 @@ serves a single static page and four endpoints:
 | `POST /api/disassemble` | `{arch, address, lines: [hex...]}` | per line: `address`, `ok`, `text` or `error` |
 | `POST /api/export` | `{arch, address, lines: [assembly...], format}` | the file as a download; `format` is `bin`, `asm`, `python` or `ruby` |
 | `POST /api/import` | `{arch, address, format, text}` or `{..., data_base64}` | `{lines, notes}`; `format` is `bin`, `nasm`, `gas`, `python` or `ruby` |
+| `GET /api/library` | — | `{entries}`: the reference shellcode catalog, each with its assembled size |
 
 `arch` is `x86`, `x64` or `arm64`. Assembly uses
 [Keystone](https://www.keystone-engine.org/); disassembly uses
@@ -114,6 +124,8 @@ app/
   engine.py          line-by-line assemble/disassemble
   export.py          export formats, including the NASM check
   importer.py        import formats
+  library.py         reference shellcode catalog
+  static/library.html the library page
   static/index.html  the whole frontend (no build step)
 Dockerfile
 docker-compose.yml

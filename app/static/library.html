@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shelldev library</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14161a; --panel: #1c1f25; --panel-focus: #1f232a; --border: #2c313a;
+    --text: #d7dae0; --muted: #7f8794; --accent: #6cb6ff; --label: #e5c07b;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 16px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  h1 { font-size: 16px; margin: 0; font-family: var(--mono); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .back { margin-left: auto; }
+
+  .toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  .toolbar label { color: var(--muted); display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  input, select {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 8px; font: 13px var(--mono);
+  }
+  #search { flex: 1 1 16em; min-width: 0; }
+  button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 12px; font: 13px system-ui, sans-serif; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: #2d4f73; border-color: #3d6a99; }
+  button.primary:hover { border-color: var(--text); }
+
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.6fr 1fr; gap: 1px; background: var(--border); }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .list, .detail { background: var(--panel); overflow: auto; min-height: 0; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  thead th {
+    position: sticky; top: 0; background: var(--panel); text-align: left;
+    padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--muted);
+    font-weight: 600; cursor: pointer; white-space: nowrap; user-select: none;
+  }
+  thead th .arrow { color: var(--accent); }
+  tbody td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--panel-focus); }
+  tbody tr.selected { background: #243244; }
+  .tag {
+    display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  }
+  .tag.decoder { color: var(--label); border-color: var(--label); }
+  td.size { text-align: right; font-family: var(--mono); color: var(--muted); }
+  .empty { padding: 24px; color: var(--muted); text-align: center; }
+
+  .detail { padding: 16px; }
+  .detail .placeholder { color: var(--muted); }
+  .detail h2 { margin: 0 0 4px; font-size: 15px; font-family: var(--mono); }
+  .detail .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .detail p { margin: 0 0 12px; }
+  .detail pre {
+    margin: 0 0 12px; padding: 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; overflow: auto; font: 13px/1.5 var(--mono); white-space: pre;
+  }
+  .detail .label { color: var(--label); }
+  .note { padding: 8px 16px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>shelldev library</h1>
+  <span class="sub">reference shellcode &amp; decoder stubs</span>
+  <a class="back" href="/">← Back to editor</a>
+</header>
+<div class="toolbar">
+  <input id="search" type="text" spellcheck="false" placeholder="Search name, description, source…">
+  <label>Arch <select id="f-arch"><option value="">any</option></select></label>
+  <label>OS <select id="f-os"><option value="">any</option></select></label>
+  <label>Function <select id="f-category"><option value="">any</option></select></label>
+  <label>Type <select id="f-kind"><option value="">any</option></select></label>
+  <button id="reset">Reset</button>
+</div>
+<main>
+  <div class="list">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="name">Name</th>
+          <th data-sort="arch">Arch</th>
+          <th data-sort="os">OS</th>
+          <th data-sort="category">Function</th>
+          <th data-sort="kind">Type</th>
+          <th data-sort="size">Size</th>
+          <th data-sort="source">Source</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden>No entries match.</div>
+  </div>
+  <div class="detail" id="detail">
+    <p class="placeholder">Select an entry to preview it, then load it into the editor.</p>
+  </div>
+</main>
+<div class="note">
+  Reference implementations, hand-written to assemble in-tool; inspired by the
+  payload families in Metasploit, pwntools and shell-storm. For study and
+  authorized testing. Network and XOR stubs use placeholder constants — review
+  before use.
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const LABEL = /^([A-Za-z_.$][\w.$]*):/;
+
+let entries = [];
+let selectedId = null;
+let sort = { key: "name", dir: 1 };
+const filters = { search: "", arch: "", os: "", category: "", kind: "" };
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+}
+
+function fillFilter(id, key) {
+  const values = [...new Set(entries.map((e) => e[key]))].sort();
+  $(id).append(...values.map((v) => Object.assign(document.createElement("option"), { value: v, textContent: v })));
+}
+
+function matches(e) {
+  if (filters.arch && e.arch !== filters.arch) return false;
+  if (filters.os && e.os !== filters.os) return false;
+  if (filters.category && e.category !== filters.category) return false;
+  if (filters.kind && e.kind !== filters.kind) return false;
+  if (filters.search) {
+    const hay = `${e.name} ${e.description} ${e.source} ${e.category} ${e.os} ${e.arch}`.toLowerCase();
+    if (!hay.includes(filters.search)) return false;
+  }
+  return true;
+}
+
+function sortValue(e) {
+  const v = e[sort.key];
+  return sort.key === "size" ? (v ?? -1) : String(v).toLowerCase();
+}
+
+function renderRows() {
+  const shown = entries.filter(matches).sort((a, b) => {
+    const [x, y] = [sortValue(a), sortValue(b)];
+    return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
+  });
+  $("rows").innerHTML = shown.map((e) => `
+    <tr data-id="${e.id}" class="${e.id === selectedId ? "selected" : ""}">
+      <td>${escapeHtml(e.name)}</td>
+      <td>${escapeHtml(e.arch)}</td>
+      <td>${escapeHtml(e.os)}</td>
+      <td>${escapeHtml(e.category)}</td>
+      <td><span class="tag ${e.kind === "decoder" ? "decoder" : ""}">${escapeHtml(e.kind)}</span></td>
+      <td class="size">${e.size == null ? "—" : e.size + " B"}</td>
+      <td>${escapeHtml(e.source)}</td>
+    </tr>`).join("");
+  $("empty").hidden = shown.length > 0;
+}
+
+function updateHeaders() {
+  document.querySelectorAll("thead th").forEach((th) => {
+    const names = { name: "Name", arch: "Arch", os: "OS", category: "Function", kind: "Type", size: "Size", source: "Source" };
+    const arrow = th.dataset.sort === sort.key ? ` <span class="arrow">${sort.dir > 0 ? "▲" : "▼"}</span>` : "";
+    th.innerHTML = names[th.dataset.sort] + arrow;
+  });
+}
+
+// Color label definitions in the preview so stubs read clearly.
+function highlightAsm(asm) {
+  return asm.split("\n").map((line) => {
+    const m = LABEL.exec(line);
+    if (m) return `<span class="label">${escapeHtml(m[0])}</span>${escapeHtml(line.slice(m[0].length))}`;
+    return escapeHtml(line);
+  }).join("\n");
+}
+
+function renderDetail() {
+  const e = entries.find((x) => x.id === selectedId);
+  if (!e) {
+    $("detail").innerHTML = '<p class="placeholder">Select an entry to preview it, then load it into the editor.</p>';
+    return;
+  }
+  $("detail").innerHTML = `
+    <h2>${escapeHtml(e.name)}</h2>
+    <div class="meta">
+      <span class="tag">${escapeHtml(e.arch)}</span>
+      <span class="tag">${escapeHtml(e.os)}</span>
+      <span class="tag">${escapeHtml(e.category)}</span>
+      <span class="tag ${e.kind === "decoder" ? "decoder" : ""}">${escapeHtml(e.kind)}</span>
+      <span class="tag">${e.size == null ? "?" : e.size + " bytes"}</span>
+      <span>source: ${escapeHtml(e.source)}</span>
+    </div>
+    <p>${escapeHtml(e.description)}</p>
+    <pre>${highlightAsm(e.asm)}</pre>
+    <button class="primary" id="load">Load in editor →</button>`;
+  $("load").addEventListener("click", () => loadIntoEditor(e));
+}
+
+function select(id) {
+  selectedId = id;
+  document.querySelectorAll("tbody tr").forEach((tr) => tr.classList.toggle("selected", tr.dataset.id === id));
+  renderDetail();
+}
+
+function loadIntoEditor(e) {
+  try {
+    localStorage.setItem("shelldev.load", JSON.stringify({
+      arch: e.arch, address: e.address, asm: e.asm, name: e.name,
+    }));
+  } catch {}
+  location.href = "/";
+}
+
+$("rows").addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr[data-id]");
+  if (tr) select(tr.dataset.id);
+});
+document.querySelectorAll("thead th").forEach((th) => th.addEventListener("click", () => {
+  const key = th.dataset.sort;
+  sort = { key, dir: sort.key === key ? -sort.dir : 1 };
+  renderRows();
+  updateHeaders();
+}));
+$("search").addEventListener("input", (e) => { filters.search = e.target.value.trim().toLowerCase(); renderRows(); });
+for (const [id, key] of [["f-arch", "arch"], ["f-os", "os"], ["f-category", "category"], ["f-kind", "kind"]]) {
+  $(id).addEventListener("change", (e) => { filters[key] = e.target.value; renderRows(); });
+}
+$("reset").addEventListener("click", () => {
+  Object.keys(filters).forEach((k) => (filters[k] = ""));
+  $("search").value = "";
+  for (const id of ["f-arch", "f-os", "f-category", "f-kind"]) $(id).value = "";
+  renderRows();
+});
+
+(async () => {
+  try {
+    const res = await fetch("/api/library");
+    entries = (await res.json()).entries;
+  } catch (e) {
+    $("rows").innerHTML = "";
+    $("empty").hidden = false;
+    $("empty").textContent = "Couldn't load the library.";
+    return;
+  }
+  fillFilter("f-arch", "arch");
+  fillFilter("f-os", "os");
+  fillFilter("f-category", "category");
+  fillFilter("f-kind", "kind");
+  renderRows();
+  updateHeaders();
+})();
+</script>
+</body>
+</html>

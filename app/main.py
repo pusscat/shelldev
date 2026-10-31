@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 import base64
 import binascii
 
-from . import export, importer
+from . import export, importer, library
 from .engine import MAX_LINES, Arch, assemble_lines, disassemble_lines, split_line
 
 STATIC = Path(__file__).parent / "static"
@@ -30,6 +30,16 @@ class LinesRequest(BaseModel):
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/library")
+def library_page():
+    return FileResponse(STATIC / "library.html")
+
+
+@app.get("/api/library")
+def library_catalog():
+    return {"entries": library.catalog()}
 
 
 @app.post("/api/assemble")

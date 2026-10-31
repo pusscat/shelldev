@@ -37,6 +37,7 @@
   button:disabled { opacity: .6; cursor: progress; }
   .export { display: flex; align-items: center; gap: 6px; margin-left: auto; }
   .export .sep { width: 1px; height: 20px; background: var(--border); margin: 0 6px; }
+  .export a { line-height: 0; }
   button.primary { background: #2d4f73; border-color: #3d6a99; }
   button.primary:hover { border-color: var(--text); }
 
@@ -140,6 +141,8 @@
   </label>
   <label>Base address <input id="address" value="0x1000" spellcheck="false" autocomplete="off"></label>
   <div class="export">
+    <a id="library-link" href="/library"><button type="button">Library</button></a>
+    <span class="sep" aria-hidden="true"></span>
     <button id="import-open">Import…</button>
     <span class="sep" aria-hidden="true"></span>
     <label for="export-format">Export</label>
@@ -723,6 +726,26 @@ try {
 hlEl.addEventListener("input", updateHighlight);
 updateHighlight();
 
+// A shellcode chosen on the library page arrives via localStorage.
+function loadPending() {
+  let pending;
+  try {
+    const raw = localStorage.getItem("shelldev.load");
+    if (!raw) return;
+    localStorage.removeItem("shelldev.load");
+    pending = JSON.parse(raw);
+  } catch { return; }
+  if (!["x86", "x64", "arm64"].includes(pending.arch) || typeof pending.asm !== "string") return;
+  archEl.value = pending.arch;
+  if (Number.isSafeInteger(pending.address) && pending.address >= 0) {
+    addrEl.value = "0x" + pending.address.toString(16);
+  }
+  panes.asm.input.value = pending.asm;
+  updateExportLabel();
+  if (pending.name) setStatus(`Loaded "${pending.name}" from the library`, "ok");
+}
+
+loadPending();
 render(panes.asm);
 convert();
 </script>
