@@ -13,7 +13,7 @@ import functools
 import logging
 import re
 
-from .engine import align_comments, faithful_asm
+from .engine import faithful_asm
 
 log = logging.getLogger("shelldev.pwn")
 
@@ -90,35 +90,48 @@ DECODER_SPECS = [
      lambda enc, raw: enc(raw)),  # default avoid = printable 0x21-0x7e
 ]
 
-def _shellcraft_anchors(source: str) -> list:
-    """Pull ordered (mnemonic, comment) anchors out of shellcraft asm source.
-    shellcraft writes Intel-syntax asm with /* ... */ comments: standalone lines
-    that describe the block that follows, and inline comments after an
-    instruction. Each instruction's comment is its inline one if present, else
-    the nearest preceding standalone comment."""
-    anchors = []
-    pending = None
+def _shellcraft_lines(source: str) -> list:
+    """Every instruction in shellcraft asm source, in order, as
+    (mnemonic, inline_comment). shellcraft emits fully-expanded Intel-syntax asm
+    (one source instruction = one machine instruction), with per-instruction
+    comments written inline as ``push ecx /* null terminate */``. Standalone
+    block comments, labels and directives are skipped."""
+    out = []
     for raw in source.splitlines():
         line = raw.strip()
         if not line:
             continue
-        inline = None
+        inline = ""
         m = re.search(r"/\*(.*?)\*/\s*$", line)
         if m:
             inline = m.group(1).strip()
             line = line[: m.start()].strip()
-        if not line:  # a standalone comment line
-            if inline:
-                pending = inline
+        if not line or line.endswith(":") or line.startswith("."):
             continue
-        if line.endswith(":") or line.startswith("."):  # label / directive
-            continue
-        mnem = line.split()[0].lstrip(".").lower()
-        comment = inline or pending
-        pending = None
-        if comment:
-            anchors.append([mnem, comment])
-    return anchors
+        out.append((line.split()[0].lstrip(".").lower(), inline))
+    return out
+
+
+def _align_shellcraft(lines: list[str], source: str) -> list:
+    """Attach shellcraft inline comments to the disassembly positionally.
+
+    Because the source assembles to exactly these bytes with one instruction per
+    line, the source instructions line up 1:1 with our disassembly, so we zip
+    them directly — no fuzzy mnemonic matching to drift. If the counts or
+    mnemonics don't line up well (e.g. a data region became .byte), we attach
+    nothing rather than risk misaligned notes."""
+    result = [None] * len(lines)
+    instrs = _shellcraft_lines(source)
+    if not instrs or len(instrs) != len(lines):
+        return result
+    dm = [ln.split(" ", 1)[0].lstrip(".").lower() if ln.strip() else "" for ln in lines]
+    agree = sum(1 for i, (m, _) in enumerate(instrs) if dm[i] == m)
+    if agree < 0.8 * len(lines):
+        return result
+    for i, (m, comment) in enumerate(instrs):
+        if comment and dm[i] == m:
+            result[i] = comment
+    return result
 
 
 def _dummy_tag(net: bool, text: str) -> str:
@@ -140,8 +153,7 @@ def _compose(net: bool, text: str, src_comment) -> str:
 
 def _entry(id, name, arch, category, kind, description, code, source=None, net=False) -> dict:
     lines = faithful_asm(arch, code, 0x1000)
-    anchors = _shellcraft_anchors(source) if source else []
-    cmts = align_comments(lines, anchors)
+    cmts = _align_shellcraft(lines, source) if source else [None] * len(lines)
     asm = "\n".join(_compose(net, ln, cmts[i]) for i, ln in enumerate(lines))
     return {
         "id": id, "name": name, "arch": arch, "os": "linux",
