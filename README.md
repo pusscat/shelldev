@@ -38,7 +38,8 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   counts them. Entries can be printable ASCII characters, `\xNN` or `0xNN`;
   spaces and commas separate entries, so use `\x20` for a space, `\x2c` for a
   comma and `\\` for a backslash. The parsed bytes are listed next to the
-  bar, and the entry is remembered in the browser.
+  bar, and the entry is remembered in the browser. It starts out as
+  `\x00 \x0D \x0A` (NUL, CR, LF).
 
 ### Syntax notes
 

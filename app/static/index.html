@@ -496,7 +496,13 @@ function updateHighlight() {
   if (lastLines.length) report(lastLines);
 }
 
-try { hlEl.value = localStorage.getItem(HL_KEY) || ""; } catch {}
+// Default to the classic bad characters: NUL, CR and LF. A saved entry
+// (even an empty one the user cleared) takes precedence.
+hlEl.value = "\\x00 \\x0D \\x0A";
+try {
+  const saved = localStorage.getItem(HL_KEY);
+  if (saved !== null) hlEl.value = saved;
+} catch {}
 hlEl.addEventListener("input", updateHighlight);
 updateHighlight();
 
