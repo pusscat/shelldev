@@ -29,7 +29,14 @@
     border-radius: 4px; padding: 4px 8px; font: 13px var(--mono);
   }
   input { width: 12em; }
-  .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+  button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 12px; font: 13px system-ui, sans-serif; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:disabled { opacity: .6; cursor: progress; }
+  .export { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+  .hint { font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: auto; }
   main {
     flex: 1; min-height: 0;
     display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border);
@@ -39,7 +46,7 @@
   .pane h2 {
     margin: 0; padding: 6px 12px; font-size: 12px; font-weight: 600;
     text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); display: flex; gap: 12px;
   }
 
   /* Each editor is a transparent textarea over a <pre> that draws the
@@ -108,7 +115,16 @@
     </select>
   </label>
   <label>Base address <input id="address" value="0x0" spellcheck="false"></label>
-  <span class="hint">// comments · ; separates instructions</span>
+  <div class="export">
+    <label for="export-format">Export</label>
+    <select id="export-format">
+      <option value="bin">Raw binary (.bin)</option>
+      <option value="asm" id="export-asm">NASM (.asm)</option>
+      <option value="python">Python string (.py)</option>
+      <option value="ruby">Ruby string (.rb)</option>
+    </select>
+    <button id="export">Download</button>
+  </div>
 </header>
 <div class="bar">
   <label for="hl">Highlight bytes</label>
@@ -119,7 +135,7 @@
 </div>
 <main>
   <section class="pane">
-    <h2>Assembly</h2>
+    <h2>Assembly <span class="hint">// comments · ; separates instructions</span></h2>
     <div class="body">
     <pre class="gutter" id="gutter" aria-hidden="true"></pre>
     <div class="editor">
@@ -473,6 +489,50 @@ panes.asm.input.addEventListener("keydown", (e) => {
     }
   }
 });
+
+// --- export ---------------------------------------------------------------
+
+const exportBtn = $("export"), exportFormatEl = $("export-format"), exportAsmEl = $("export-asm");
+
+function updateExportLabel() {
+  // NASM has no ARM support, so ARM64 exports GNU as syntax instead.
+  exportAsmEl.textContent = archEl.value === "arm64" ? "GNU as (.s)" : "NASM (.asm)";
+}
+
+async function downloadExport() {
+  const address = parseAddress();
+  if (address === null) return setStatus("Invalid base address", "error");
+  exportBtn.disabled = true;
+  try {
+    const res = await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        arch: archEl.value, address, format: exportFormatEl.value,
+        lines: panes.asm.input.value.split("\n"),
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return setStatus(`Can't export: ${body.error || `server error ${res.status}`}`, "error");
+    }
+    const name = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "")?.[1] || "shellcode";
+    const url = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement("a"), { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    setStatus(`Can't export: ${e.message}`, "error");
+  } finally {
+    exportBtn.disabled = false;
+  }
+}
+
+exportBtn.addEventListener("click", downloadExport);
+archEl.addEventListener("change", updateExportLabel);
+updateExportLabel();
 
 archEl.addEventListener("change", convert);
 addrEl.addEventListener("input", schedule);

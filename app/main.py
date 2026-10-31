@@ -11,9 +11,11 @@ from typing import Literal
 import capstone
 import keystone
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+
+from . import export
 
 Arch = Literal["x86", "x64", "arm64"]
 
@@ -131,31 +133,77 @@ def _assemble_pass(arch: Arch, parsed, address: int, symbols: dict[str, int]):
         for name in labels:
             seen[name] = current
         line = {"address": current if labels or code else None}
-        data = b""
+        data, parts = b"", []
         try:
             for stmt in filter(str.strip, code.split(";")):
-                data += _assemble_statement(ks, arch, stmt, current + len(data), symbols, pattern)
+                encoded = _assemble_statement(ks, arch, stmt, current + len(data), symbols, pattern)
+                parts.append((stmt.strip(), encoded))
+                data += encoded
         except keystone.KsError as e:
             results.append({**line, "ok": False, "error": str(e)})
             continue
-        results.append({**line, "ok": True, "bytes": data.hex(" ")})
+        # "parts" (each statement and its bytes) is used by export, not sent.
+        results.append({**line, "ok": True, "bytes": data.hex(" "), "parts": parts})
         current += len(data)
     return results, seen
 
 
-@app.post("/api/assemble")
-def assemble(req: AssembleRequest):
-    parsed = [_split_line(line) for line in req.lines]
+def assemble_lines(arch: Arch, lines: list[str], address: int) -> list[dict]:
+    parsed = [_split_line(line) for line in lines]
     # Start every label at the base address, then repeat: instruction sizes
     # depend on label addresses (short vs. near jumps), which in turn move
     # the labels. Stop once the addresses settle.
-    symbols = {name: req.address for labels, _ in parsed for name in labels}
+    symbols = {name: address for labels, _ in parsed for name in labels}
     for _ in range(MAX_PASSES):
-        results, seen = _assemble_pass(req.arch, parsed, req.address, symbols)
+        results, seen = _assemble_pass(arch, parsed, address, symbols)
         if seen == symbols:
             break
         symbols = seen
-    return {"lines": results}
+    return results
+
+
+@app.post("/api/assemble")
+def assemble(req: AssembleRequest):
+    results = assemble_lines(req.arch, req.lines, req.address)
+    return {"lines": [{k: v for k, v in r.items() if k != "parts"} for r in results]}
+
+
+# --- export ------------------------------------------------------------------
+
+
+class ExportRequest(AssembleRequest):
+    format: Literal["bin", "asm", "python", "ruby"]
+
+
+@app.post("/api/export")
+def export_code(req: ExportRequest):
+    results = assemble_lines(req.arch, req.lines, req.address)
+    for n, r in enumerate(results, 1):
+        if not r["ok"]:
+            return JSONResponse({"error": f"Line {n}: {r['error']}"}, status_code=422)
+
+    rows = []
+    for line, r in zip(req.lines, results):
+        labels, _ = _split_line(line)
+        _, _, comment = line.partition("//")
+        rows.append({
+            "source": line.strip(),
+            "labels": labels,
+            "parts": r["parts"],
+            "comment": comment.strip(),
+        })
+
+    if req.format == "bin":
+        body, name, media = export.to_bin(rows), "shellcode.bin", "application/octet-stream"
+    elif req.format == "python":
+        body, name, media = export.to_python(req.arch, req.address, rows), "shellcode.py", "text/x-python"
+    elif req.format == "ruby":
+        body, name, media = export.to_ruby(req.arch, req.address, rows), "shellcode.rb", "text/x-ruby"
+    elif req.arch == "arm64":
+        body, name, media = export.to_gas(req.arch, req.address, rows), "shellcode.s", "text/plain"
+    else:
+        body, name, media = export.to_nasm(req.arch, req.address, rows), "shellcode.asm", "text/plain"
+    return Response(body, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 # --- bytes -> assembly ------------------------------------------------------

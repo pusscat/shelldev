@@ -41,6 +41,26 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   bar, and the entry is remembered in the browser. It starts out as
   `\x00 \x0D \x0A` (NUL, CR, LF).
 
+- **Export.** The Export menu in the header downloads the current program
+  as:
+  - **Raw binary** (`shellcode.bin`): just the bytes.
+  - **Assembly source**: for x86/x64, a NASM file (`shellcode.asm`) with
+    `BITS`, `section .text` and `global _start`, ready for
+    `nasm -f elf64 shellcode.asm && ld -o shellcode shellcode.o`
+    (`-f elf32` and `ld -m elf_i386` for x86). The server assembles the file
+    with NASM and compares it line by line with the bytes shown in the app;
+    any line NASM would encode differently (for example `mov rax, 1`, which
+    NASM shortens), or that refers to an absolute address, is written as
+    `db` bytes with the original instruction as a comment. The result
+    always assembles to exactly the same bytes. NASM doesn't support ARM, so
+    for ARM64 it's a GNU as file (`shellcode.s`) instead; branches with a
+    numeric target are written as `.inst` words.
+  - **Python** (`shellcode.py`) or **Ruby** (`shellcode.rb`): a `shellcode`
+    byte string built one line at a time, with each line's assembly as a
+    comment.
+
+  Export is refused while any line has an error.
+
 ### Syntax notes
 
 - Comments start with `//` on every architecture.
@@ -54,12 +74,13 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
 ## How it works
 
 A small [FastAPI](https://fastapi.tiangolo.com/) server, run by Uvicorn,
-serves a single static page and two JSON endpoints:
+serves a single static page and three endpoints:
 
 | Endpoint | Input | Output |
 | --- | --- | --- |
 | `POST /api/assemble` | `{arch, address, lines: [assembly...]}` | per line: `address`, `ok`, `bytes` or `error` |
 | `POST /api/disassemble` | `{arch, address, lines: [hex...]}` | per line: `address`, `ok`, `text` or `error` |
+| `POST /api/export` | `{arch, address, lines: [assembly...], format}` | the file as a download; `format` is `bin`, `asm`, `python` or `ruby` |
 
 `arch` is `x86`, `x64` or `arm64`. Assembly uses
 [Keystone](https://www.keystone-engine.org/); disassembly uses
@@ -68,6 +89,7 @@ serves a single static page and two JSON endpoints:
 ```
 app/
   main.py            API and line-by-line assemble/disassemble
+  export.py          export formats, including the NASM check
   static/index.html  the whole frontend (no build step)
 Dockerfile
 docker-compose.yml
@@ -104,7 +126,9 @@ To serve on a different port, change the left side of the mapping in
 
 Needs Python 3.12. Keystone and Capstone install from prebuilt wheels on
 x86-64 Linux; on other platforms Keystone may need `cmake` and a C++ compiler
-to build from source.
+to build from source. Install `nasm` too (e.g. `apt install nasm`) so NASM
+exports can be checked; without it they're exported unchecked, with a note in
+the file.
 
 ```sh
 python3 -m venv .venv
