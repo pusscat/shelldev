@@ -6,6 +6,7 @@
 <title>shelldev</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #14161a; --panel: #1c1f25; --panel-focus: #1f232a; --border: #2c313a;
     --text: #d7dae0; --muted: #7f8794; --error: #ff7b72; --ok: #7ee787; --label: #e5c07b;
     --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
@@ -52,6 +53,7 @@
   .editor pre { color: var(--text); background: var(--panel); overflow: hidden; pointer-events: none; }
   .editor textarea {
     resize: none; outline: 0; background: transparent;
+    scrollbar-color: var(--border) transparent;
     color: transparent; caret-color: var(--text);
   }
   .editor textarea::selection { background: rgba(108, 182, 255, .35); }
@@ -101,15 +103,15 @@
     <div class="editor">
       <pre id="asm-view" aria-hidden="true"></pre>
       <textarea id="asm" spellcheck="false" autofocus>main:
-    push rbp
-    mov rbp, rsp
-    xor eax, eax
+  push rbp
+  mov rbp, rsp
+  xor eax, eax
 loop:
-    inc eax
-    cmp eax, 10
-    jl loop
-    pop rbp
-    ret</textarea>
+  inc eax
+  cmp eax, 10
+  jl loop
+  pop rbp
+  ret</textarea>
     </div>
     </div>
   </section>
@@ -144,7 +146,7 @@ function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
 }
 
-const INDENT = "    ";
+const INDENT = "  ";
 const LABEL_DEF = /^(\s*)([A-Za-z_.$][\w.$]*)(\s*:)(?!:)/;
 const LABEL_ONLY = /^\s*([A-Za-z_.$][\w.$]*\s*:(?!:)\s*)+$/;
 
@@ -269,6 +271,8 @@ async function convert() {
       // Disassembly has no labels, so indent every instruction to match.
       return source === "hex" && text ? INDENT + text : text;
     }).join("\n");
+    // Replacing the text resets its scroll position; keep the panes aligned.
+    to.input.scrollTop = from.input.scrollTop;
     addresses = r.lines.map((l) => l.address);
     render(from);
     render(to);
@@ -299,7 +303,8 @@ function schedule() {
 }
 
 for (const [name, pane] of Object.entries(panes)) {
-  pane.input.addEventListener("input", () => {
+  pane.input.addEventListener("input", (e) => {
+    if (name === "asm" && !e.inputType?.startsWith("history")) autoIndent(pane.input);
     source = name;
     render(pane);
     if (name === "asm") renderGutter();
@@ -321,28 +326,70 @@ function insertText(el, text) {
   }
 }
 
-// Auto-indent: Enter after a label line indents the next line; otherwise the
-// next line keeps the current indent. Typing ":" after a lone word on an
-// indented line turns it into a label and moves it back to the left edge.
+// Auto-indent: labels sit at the left edge and every other non-blank line
+// is indented by INDENT. Applied after each edit as a single text insertion,
+// so it stays in the undo history (one extra undo step when it changes
+// something). Undo/redo themselves are left alone so they can step back.
+function indentLine(line) {
+  if (!line.trim()) return line;
+  const body = line.replace(/^[ \t]+/, "");
+  return LABEL_DEF.test(body) ? body : INDENT + body;
+}
+
+function autoIndent(el) {
+  const oldLines = el.value.split("\n");
+  const newLines = oldLines.map(indentLine);
+  let first = 0, last = oldLines.length - 1;
+  while (first <= last && oldLines[first] === newLines[first]) first++;
+  if (first > last) return;
+  while (oldLines[last] === newLines[last]) last--;
+
+  // Map a cursor offset in the old text to the new text.
+  const mapOffset = (pos) => {
+    let offset = 0, newOffset = 0;
+    for (let i = 0; i < oldLines.length; i++) {
+      const len = oldLines[i].length;
+      if (pos <= offset + len) {
+        const col = pos - offset;
+        const oldIndent = oldLines[i].length - oldLines[i].replace(/^[ \t]+/, "").length;
+        const newIndent = newLines[i].length - newLines[i].replace(/^[ \t]+/, "").length;
+        const newCol = !oldLines[i].trim() ? col : col <= oldIndent ? newIndent : col - oldIndent + newIndent;
+        return newOffset + newCol;
+      }
+      offset += len + 1;
+      newOffset += newLines[i].length + 1;
+    }
+    return newOffset;
+  };
+  const selStart = mapOffset(el.selectionStart), selEnd = mapOffset(el.selectionEnd);
+
+  const lineOffset = (lines, n) => lines.slice(0, n).reduce((sum, l) => sum + l.length + 1, 0);
+  const from = lineOffset(oldLines, first);
+  const to = lineOffset(oldLines, last) + oldLines[last].length;
+  el.setSelectionRange(from, to);
+  insertText(el, newLines.slice(first, last + 1).join("\n"));
+  el.setSelectionRange(selStart, selEnd);
+}
+
 panes.asm.input.addEventListener("keydown", (e) => {
   if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
   const el = e.target, v = el.value, start = el.selectionStart;
+  if (start !== el.selectionEnd) return;
   const lineStart = v.lastIndexOf("\n", start - 1) + 1;
   const before = v.slice(lineStart, start);
 
   if (e.key === "Enter" && !e.shiftKey) {
-    const [code] = stripComment(before);
-    const indent = LABEL_ONLY.test(code) ? INDENT : /^[ \t]*/.exec(before)[0];
+    // New lines are for instructions; typing a label there moves it left.
     e.preventDefault();
-    insertText(el, "\n" + indent);
-  } else if (e.key === ":" && start === el.selectionEnd) {
-    const lineEnd = v.indexOf("\n", start);
-    const after = v.slice(start, lineEnd < 0 ? v.length : lineEnd);
-    const m = /^[ \t]+([A-Za-z_.$][\w.$]*)$/.exec(before);
-    if (m && !after.trim()) {
-      e.preventDefault();
-      el.setSelectionRange(lineStart, start);
-      insertText(el, m[1] + ":");
+    insertText(el, "\n" + INDENT);
+  } else if (e.key === "Backspace" && before && !before.trim() && lineStart > 0) {
+    // Inside the indent the indent would just come back, so join this line
+    // onto the previous one instead.
+    e.preventDefault();
+    el.setSelectionRange(lineStart - 1, start);
+    if (!document.execCommand("delete")) {
+      el.setRangeText("", lineStart - 1, start, "end");
+      el.dispatchEvent(new Event("input"));
     }
   }
 });
