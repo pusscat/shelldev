@@ -138,7 +138,7 @@
       <option value="arm64">ARM64</option>
     </select>
   </label>
-  <label>Base address <input id="address" value="0x0" spellcheck="false"></label>
+  <label>Base address <input id="address" value="0x1000" spellcheck="false" autocomplete="off"></label>
   <div class="export">
     <button id="import-open">Import…</button>
     <span class="sep" aria-hidden="true"></span>
@@ -386,9 +386,11 @@ function setStatus(text, kind) {
   statusEl.className = kind || "";
 }
 
+const DEFAULT_ADDRESS = 0x1000;
+
 function parseAddress() {
   const s = addrEl.value.trim();
-  if (!s) return 0;
+  if (!s) return DEFAULT_ADDRESS;
   const n = /^0x[0-9a-f]+$/i.test(s) ? parseInt(s, 16) : /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
   return Number.isSafeInteger(n) ? n : null;
 }

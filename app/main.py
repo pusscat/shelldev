@@ -15,6 +15,7 @@ from . import export, importer
 from .engine import MAX_LINES, Arch, assemble_lines, disassemble_lines, split_line
 
 STATIC = Path(__file__).parent / "static"
+DEFAULT_ADDRESS = 0x1000
 
 app = FastAPI(title="shelldev")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -23,7 +24,7 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 class LinesRequest(BaseModel):
     arch: Arch
     lines: list[str] = Field(max_length=MAX_LINES)
-    address: int = Field(0, ge=0, lt=2**64)
+    address: int = Field(DEFAULT_ADDRESS, ge=0, lt=2**64)
 
 
 @app.get("/")
@@ -79,7 +80,7 @@ def export_code(req: ExportRequest):
 
 class ImportRequest(BaseModel):
     arch: Arch
-    address: int = Field(0, ge=0, lt=2**64)
+    address: int = Field(DEFAULT_ADDRESS, ge=0, lt=2**64)
     format: Literal["bin", "nasm", "gas", "python", "ruby"]
     text: str | None = Field(None, max_length=512 * 1024)
     data_base64: str | None = Field(None, max_length=(importer.MAX_BINARY * 4) // 3 + 4)
