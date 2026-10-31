@@ -5,7 +5,8 @@ WORKDIR /srv
 
 COPY requirements.txt .
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nasm \
+    && apt-get install -y --no-install-recommends \
+       nasm binutils binutils-aarch64-linux-gnu cpp \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir -r requirements.txt
 

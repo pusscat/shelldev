@@ -186,3 +186,11 @@ def disassemble_blob(arch: Arch, data: bytes, address: int) -> list[str]:
     md = capstone.Cs(*CS_MODES[arch])
     md.skipdata = True
     return [f"{i.mnemonic} {i.op_str}".strip() for i in md.disasm(data, address)]
+
+
+def disassemble_detail(arch: Arch, data: bytes, address: int) -> list[tuple[str, str]]:
+    """Disassemble a blob into (hex bytes, instruction text) per instruction.
+    Undecodable bytes become `.byte` lines (one per byte)."""
+    md = capstone.Cs(*CS_MODES[arch])
+    md.skipdata = True
+    return [(i.bytes.hex(" "), f"{i.mnemonic} {i.op_str}".strip()) for i in md.disasm(data, address)]

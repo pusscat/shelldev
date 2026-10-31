@@ -808,15 +808,25 @@ function loadPending() {
     localStorage.removeItem("shelldev.load");
     pending = JSON.parse(raw);
   } catch { return false; }
-  if (!["x86", "x64", "arm64"].includes(pending.arch) || typeof pending.asm !== "string") return false;
+  const hasAsm = typeof pending.asm === "string";
+  const hasBytes = Array.isArray(pending.bytes_lines);
+  if (!["x86", "x64", "arm64"].includes(pending.arch) || (!hasAsm && !hasBytes)) return false;
   archEl.value = pending.arch;
   if (Number.isSafeInteger(pending.address) && pending.address >= 0) {
     addrEl.value = "0x" + pending.address.toString(16);
   }
-  // Move the entry's inline comments into the Comments column, like import.
-  const { codes, notes } = splitImported(pending.asm.split("\n"));
-  panes.asm.input.value = codes.join("\n");
-  commentsEl.value = notes.join("\n");
+  commentsEl.value = "";
+  if (hasBytes) {
+    // Raw-bytes entry: load the bytes and let the editor disassemble them.
+    panes.hex.input.value = pending.bytes_lines.join("\n");
+    source = "hex";
+  } else {
+    // Move the entry's inline comments into the Comments column, like import.
+    const { codes, notes } = splitImported(pending.asm.split("\n"));
+    panes.asm.input.value = codes.join("\n");
+    commentsEl.value = notes.join("\n");
+    source = "asm";
+  }
   updateExportLabel();
   if (pending.name) setStatus(`Loaded "${pending.name}" from the library`, "ok");
   return true;

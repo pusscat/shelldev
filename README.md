@@ -92,10 +92,17 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   by architecture, OS, function (exec, exit, reverse shell, decoder…) and type
   (payload or decoder). Each entry shows a preview and its assembled size;
   "Load in editor" sends it back to the editor with the right architecture and
-  base address. The entries are hand-written reference implementations that
-  assemble in-tool, inspired by the payload families in Metasploit, pwntools
-  and shell-storm (not copied verbatim); network and XOR stubs use placeholder
-  constants (127.0.0.1:4444, key 0xaa) meant to be edited.
+  base address. There are two sources of entries:
+  - **Hand-written** reference implementations that assemble in-tool, inspired
+    by the payload families in Metasploit and shell-storm (not copied
+    verbatim); these load as editable assembly. Network and XOR stubs use
+    placeholder constants (127.0.0.1:4444, key 0xaa) meant to be edited.
+  - **pwntools-generated** entries (`sh`, `exit`, `cat`, reverse and bind
+    shells, per architecture), produced at runtime by pwntools' `shellcraft`.
+    These load as **raw bytes**: the editor disassembles them, so you see the
+    tool's own disassembly of the real payload. They need pwntools and its
+    assemblers in the image (see below); when those are missing they are
+    simply left out.
 
 ### Syntax notes
 
@@ -130,7 +137,8 @@ app/
   engine.py          line-by-line assemble/disassemble
   export.py          export formats, including the NASM check
   importer.py        import formats
-  library.py         reference shellcode catalog
+  library.py         hand-written shellcode catalog
+  pwn_catalog.py     pwntools-generated entries (raw bytes)
   static/library.html the library page
   static/index.html  the whole frontend (no build step)
 Dockerfile
@@ -170,7 +178,10 @@ Needs Python 3.12. Keystone and Capstone install from prebuilt wheels on
 x86-64 Linux; on other platforms Keystone may need `cmake` and a C++ compiler
 to build from source. Install `nasm` too (e.g. `apt install nasm`) so NASM
 exports can be checked; without it they're exported unchecked, with a note in
-the file.
+the file. The pwntools library entries need pwntools (in `requirements.txt`)
+plus the assemblers it calls — `binutils`, `binutils-aarch64-linux-gnu` and
+`cpp` (the Docker image installs these); any entry whose assembler is missing
+is skipped, and the rest of the app is unaffected.
 
 ```sh
 python3 -m venv .venv

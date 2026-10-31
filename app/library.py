@@ -133,7 +133,7 @@ encoded:
         "id": "x64-linux-execve",
         "name": "execve(\"/bin/sh\")",
         "arch": "x64", "os": "linux",
-        "category": "exec", "kind": "payload", "source": "pwntools",
+        "category": "exec", "kind": "payload", "source": "shell-storm",
         "description": "Linux x64 execve(\"/bin/sh\") shell spawn.",
         "address": 0x1000,
         "asm": _X64_EXECVE,
@@ -142,7 +142,7 @@ encoded:
         "id": "x64-linux-exit",
         "name": "exit(0)",
         "arch": "x64", "os": "linux",
-        "category": "exit", "kind": "payload", "source": "pwntools",
+        "category": "exit", "kind": "payload", "source": "shell-storm",
         "description": "Linux x64 exit(0) via syscall.",
         "address": 0x1000,
         "asm": """\
@@ -218,7 +218,7 @@ encoded:
         "id": "arm64-linux-execve",
         "name": "execve(\"/bin/sh\")",
         "arch": "arm64", "os": "linux",
-        "category": "exec", "kind": "payload", "source": "pwntools",
+        "category": "exec", "kind": "payload", "source": "shell-storm",
         "description": "Linux ARM64 execve(\"/bin/sh\"); builds the path with movz/movk.",
         "address": 0x1000,
         "asm": """\
@@ -239,7 +239,7 @@ encoded:
         "id": "arm64-linux-exit",
         "name": "exit(0)",
         "arch": "arm64", "os": "linux",
-        "category": "exit", "kind": "payload", "source": "pwntools",
+        "category": "exit", "kind": "payload", "source": "shell-storm",
         "description": "Linux ARM64 exit(0) via svc.",
         "address": 0x1000,
         "asm": """\
@@ -291,8 +291,17 @@ def _size(arch: Arch, asm: str, address: int) -> int | None:
 
 
 def catalog() -> list[dict]:
-    """The library with each entry's assembled size, for the API."""
+    """The full library for the API: hand-written entries (loaded as
+    assembly) plus any pwntools-generated entries (loaded as raw bytes)."""
+    from . import pwn_catalog
+
     out = []
     for entry in LIBRARY:
-        out.append({**entry, "size": _size(entry["arch"], entry["asm"], entry["address"])})
+        out.append({
+            **entry,
+            "size": _size(entry["arch"], entry["asm"], entry["address"]),
+            "load": "asm",
+            "preview": entry["asm"],
+        })
+    out.extend(pwn_catalog.entries())
     return out

@@ -74,6 +74,7 @@
   .detail h2 { margin: 0 0 4px; font-size: 15px; font-family: var(--mono); }
   .detail .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
   .detail p { margin: 0 0 12px; }
+  .loadnote { color: var(--muted); font-size: 12px; }
   .detail pre {
     margin: 0 0 12px; padding: 12px; background: var(--bg); border: 1px solid var(--border);
     border-radius: 4px; overflow: auto; font: 13px/1.5 var(--mono); white-space: pre;
@@ -211,7 +212,10 @@ function renderDetail() {
       <span>source: ${escapeHtml(e.source)}</span>
     </div>
     <p>${escapeHtml(e.description)}</p>
-    <pre>${highlightAsm(e.asm)}</pre>
+    <pre>${highlightAsm(e.preview || e.asm || "")}</pre>
+    <p class="loadnote">${e.load === "bytes"
+      ? "Loads as raw bytes (the editor disassembles them)."
+      : "Loads as editable assembly."}</p>
     <button class="primary" id="load">Load in editor →</button>`;
   $("load").addEventListener("click", () => loadIntoEditor(e));
 }
@@ -223,10 +227,11 @@ function select(id) {
 }
 
 function loadIntoEditor(e) {
+  const payload = { arch: e.arch, address: e.address, name: e.name };
+  if (e.load === "bytes") payload.bytes_lines = e.bytes_lines;
+  else payload.asm = e.asm;
   try {
-    localStorage.setItem("shelldev.load", JSON.stringify({
-      arch: e.arch, address: e.address, asm: e.asm, name: e.name,
-    }));
+    localStorage.setItem("shelldev.load", JSON.stringify(payload));
   } catch {}
   location.href = "/";
 }
