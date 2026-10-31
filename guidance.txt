@@ -1,0 +1,32 @@
+  Rough guidance:
+  - API-only / async-heavy → FastAPI
+  - Full web app with admin, auth, DB baked in → Django (+ DRF)
+  - Small, custom, or you want to learn the pieces → Flask
+
+  Supporting packages you'll likely need
+
+  ASGI/WSGI server (to run the app in production)
+  - Uvicorn — ASGI server, standard for FastAPI (often behind Gunicorn: gunicorn -k uvicorn.workers.UvicornWorker).
+  - Gunicorn — WSGI server, standard for Flask/Django sync apps.
+
+  Database / ORM
+  - SQLAlchemy — The dominant Python ORM/toolkit; pairs with FastAPI and Flask. Use Alembic for schema migrations.
+  - Django ORM — Built into Django, migrations included.
+  - SQLModel — SQLAlchemy + Pydantic by FastAPI's author, convenient with FastAPI.
+  - Drivers: psycopg (PostgreSQL), asyncpg (async Postgres), PyMySQL.
+
+  Data validation / serialization
+  - Pydantic — Validation via type hints; core to FastAPI, also usable standalone.
+  - Marshmallow — Common in the Flask ecosystem.
+
+  Auth
+  - Authlib or python-jose / PyJWT for JWT/OAuth.
+  - Django's built-in auth, or django-allauth for social login.
+
+  Background jobs / async tasks
+  - Celery (with Redis or RabbitMQ as broker) — the standard.
+  - arq or Dramatiq — lighter async-friendly alternatives.
+
+  HTTP client (for calling other APIs)
+  - httpx — async-capable, modern; the common choice with FastAPI.
+  - requests — sync, ubiquitous, simple.

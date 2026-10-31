@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shelldev</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f25; --panel-focus: #1f232a; --border: #2c313a;
+    --text: #d7dae0; --muted: #7f8794; --error: #ff7b72; --ok: #7ee787;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 16px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  h1 { font-size: 16px; margin: 0 8px 0 0; font-family: var(--mono); }
+  label { color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  select, input {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font: 13px var(--mono);
+  }
+  input { width: 12em; }
+  .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+  main {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border);
+  }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  .pane { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+  .pane h2 {
+    margin: 0; padding: 6px 12px; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Each editor is a transparent textarea over a <pre> that draws the
+     colored text, since a textarea can't color individual lines. */
+  .editor { position: relative; flex: 1; min-height: 200px; }
+  .editor pre, .editor textarea {
+    position: absolute; inset: 0; margin: 0; border: 0; padding: 12px;
+    font: 14px/1.5 var(--mono); white-space: pre; tab-size: 8;
+    overflow: auto; letter-spacing: normal; word-spacing: normal;
+  }
+  .editor pre { color: var(--text); background: var(--panel); overflow: hidden; pointer-events: none; }
+  .editor textarea {
+    resize: none; outline: 0; background: transparent;
+    color: transparent; caret-color: var(--text);
+  }
+  .editor textarea::selection { background: rgba(108, 182, 255, .35); }
+  .editor:focus-within pre { background: var(--panel-focus); }
+  .bad { color: var(--error); }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+  .gutter {
+    margin: 0; padding: 12px 10px 12px 12px; overflow: hidden;
+    font: 14px/1.5 var(--mono); white-space: pre; text-align: right;
+    color: var(--muted); background: var(--bg); border-right: 1px solid var(--border);
+    user-select: none; flex: none;
+  }
+  .unknown { color: var(--error); opacity: .75; }
+
+  footer {
+    padding: 6px 16px; border-top: 1px solid var(--border);
+    font: 12px var(--mono); color: var(--muted); min-height: 2em;
+  }
+  footer.error { color: var(--error); }
+  footer.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1>shelldev</h1>
+  <label>Arch
+    <select id="arch">
+      <option value="x86">x86 (32-bit)</option>
+      <option value="x64" selected>x64</option>
+      <option value="arm64">ARM64</option>
+    </select>
+  </label>
+  <label>Base address <input id="address" value="0x0" spellcheck="false"></label>
+  <span class="hint">// comments · ; separates instructions</span>
+</header>
+<main>
+  <section class="pane">
+    <h2>Assembly</h2>
+    <div class="body">
+    <pre class="gutter" id="gutter" aria-hidden="true"></pre>
+    <div class="editor">
+      <pre id="asm-view" aria-hidden="true"></pre>
+      <textarea id="asm" spellcheck="false" autofocus>push rbp
+mov rbp, rsp
+xor eax, eax
+pop rbp
+ret</textarea>
+    </div>
+    </div>
+  </section>
+  <section class="pane">
+    <h2>Bytes</h2>
+    <div class="editor">
+      <pre id="hex-view" aria-hidden="true"></pre>
+      <textarea id="hex" spellcheck="false"></textarea>
+    </div>
+  </section>
+</main>
+<footer id="status"></footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const archEl = $("arch"), addrEl = $("address"), statusEl = $("status"), gutterEl = $("gutter");
+
+// Address of each line, from the last conversion (null for blank lines).
+let addresses = [];
+
+// Per-line state for each side: "ok", "bad" (invalid input) or "unknown" (??? placeholder).
+const panes = {
+  asm: { input: $("asm"), view: $("asm-view"), states: [] },
+  hex: { input: $("hex"), view: $("hex-view"), states: [] },
+};
+
+// The side the user last typed in is the source; the other side is regenerated.
+let source = "asm";
+let timer = null;
+let requestId = 0;
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+}
+
+function render(pane) {
+  const lines = pane.input.value.split("\n");
+  pane.view.innerHTML = lines.map((line, i) => {
+    const state = pane.states[i];
+    const html = escapeHtml(line);
+    return state && state !== "ok" ? `<span class="${state}">${html}</span>` : html;
+  }).join("\n") + "\n";
+  syncScroll(pane);
+}
+
+function renderGutter() {
+  const count = panes.asm.input.value.split("\n").length;
+  // Pad to the pointer size: 4 bytes on x86, 8 bytes on x64 and ARM64.
+  const width = archEl.value === "x86" ? 8 : 16;
+  const rows = [];
+  for (let i = 0; i < count; i++) {
+    const a = addresses[i];
+    rows.push(a == null ? "" : a.toString(16).padStart(width, "0"));
+  }
+  gutterEl.textContent = rows.join("\n") + "\n";
+  gutterEl.scrollTop = panes.asm.input.scrollTop;
+}
+
+function syncScroll(pane) {
+  pane.view.scrollTop = pane.input.scrollTop;
+  pane.view.scrollLeft = pane.input.scrollLeft;
+}
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = kind || "";
+}
+
+function parseAddress() {
+  const s = addrEl.value.trim();
+  if (!s) return 0;
+  const n = /^0x[0-9a-f]+$/i.test(s) ? parseInt(s, 16) : /^\d+$/.test(s) ? parseInt(s, 10) : NaN;
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Server error ${res.status}`);
+  return res.json();
+}
+
+async function convert() {
+  const address = parseAddress();
+  if (address === null) return setStatus("Invalid base address", "error");
+  const arch = archEl.value;
+  if (arch === "x86" && address > 0xffffffff) return setStatus("Base address doesn't fit in 32 bits", "error");
+  const from = panes[source];
+  const to = panes[source === "asm" ? "hex" : "asm"];
+  const id = ++requestId;
+  try {
+    const path = source === "asm" ? "/api/assemble" : "/api/disassemble";
+    const r = await post(path, { arch, address, lines: from.input.value.split("\n") });
+    if (id !== requestId) return;
+    const field = source === "asm" ? "bytes" : "text";
+    from.states = r.lines.map((l) => (l.ok ? "ok" : "bad"));
+    to.states = r.lines.map((l) => (l.ok ? "ok" : "unknown"));
+    to.input.value = r.lines.map((l) => (l.ok ? l[field] : "???")).join("\n");
+    addresses = r.lines.map((l) => l.address);
+    render(from);
+    render(to);
+    renderGutter();
+    report(r.lines);
+  } catch (e) {
+    if (id === requestId) setStatus(e.message, "error");
+  }
+}
+
+function report(lines) {
+  const errors = lines.map((l, i) => [i + 1, l]).filter(([, l]) => !l.ok);
+  const bytes = panes.hex.input.value.split("\n")
+    .filter((_, i) => lines[i]?.ok)
+    .join(" ").split(/\s+/).filter(Boolean).length;
+  if (errors.length) {
+    const [line, first] = errors[0];
+    const more = errors.length > 1 ? ` (+${errors.length - 1} more)` : "";
+    setStatus(`Line ${line}: ${first.error}${more}`, "error");
+  } else {
+    setStatus(`${bytes} byte${bytes === 1 ? "" : "s"}`, "ok");
+  }
+}
+
+function schedule() {
+  clearTimeout(timer);
+  timer = setTimeout(convert, 200);
+}
+
+for (const [name, pane] of Object.entries(panes)) {
+  pane.input.addEventListener("input", () => {
+    source = name;
+    render(pane);
+    if (name === "asm") renderGutter();
+    schedule();
+  });
+  pane.input.addEventListener("scroll", () => {
+    syncScroll(pane);
+    if (name === "asm") gutterEl.scrollTop = pane.input.scrollTop;
+    // Keep the other side scrolled to the same lines.
+    const other = panes[name === "asm" ? "hex" : "asm"];
+    if (other.input.scrollTop !== pane.input.scrollTop) other.input.scrollTop = pane.input.scrollTop;
+  });
+}
+archEl.addEventListener("change", convert);
+addrEl.addEventListener("input", schedule);
+
+render(panes.asm);
+convert();
+</script>
+</body>
+</html>

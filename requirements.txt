@@ -1,0 +1,4 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+keystone-engine==0.9.2
+capstone==5.0.6
