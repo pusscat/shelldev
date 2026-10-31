@@ -16,9 +16,8 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   matching line on the other side shows `???`. The status bar names the first
   failing line and the reason. Other lines keep converting.
 - **Addresses.** Set a base address at the top (0x1000 by default); each
-  line's address is shown
-  down the left, padded to the processor's pointer size (8 hex digits on x86,
-  16 on x64 and ARM64).
+  line's address is shown down the left, padded to the processor's pointer
+  size (8 hex digits on x86, 16 on x64 and ARM64).
 - **Labels.** `name:` defines a label, either on its own line or in front of
   an instruction. Labels can be referenced forwards or backwards by relative
   branches and PC-relative instructions: x86/x64 `jmp`, `jcc`, `call`,
