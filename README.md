@@ -18,16 +18,21 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
 - **Addresses.** Set a base address at the top; each line's address is shown
   down the left, padded to the processor's pointer size (8 hex digits on x86,
   16 on x64 and ARM64).
-- **Labels.** `name:` defines a label, which can be used forwards or
-  backwards (`jmp done`, `b loop`).
+- **Labels.** `name:` defines a label, either on its own line or in front of
+  an instruction. Labels can be referenced forwards or backwards by relative
+  branches and PC-relative instructions: x86/x64 `jmp`, `jcc`, `call`,
+  `loop`, `jecxz`, `[rip + label]`; ARM64 `b`, `bl`, `b.cond`, `cbz`/`cbnz`,
+  `tbz`/`tbnz`, `adr`, `adrp`, `ldr` (literal). Used anywhere else (e.g.
+  `mov rax, label`) a label stands for its absolute address. Branches pick the
+  shortest encoding that reaches the target.
 
 ### Syntax notes
 
 - Comments start with `//` on every architecture.
 - `;` separates multiple instructions on one line (`nop; ret`).
 - Bytes can be written as `55 48 89 e5`, `\x55\x48`, or `0x55, 0x48`.
-- Label references inside memory operands (`lea rax, [rip+label]`) are not
-  supported: labels are replaced by their absolute address.
+- Label names start with a letter, `_`, `.` or `$`; numeric local labels
+  (`1:`, `1b`, `1f`) are not supported.
 - Editing the bytes side regenerates the assembly side, so labels and comments
   on the left are lost.
 

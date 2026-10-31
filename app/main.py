@@ -68,47 +68,76 @@ def _split_line(line: str) -> tuple[list[str], str]:
     return labels, code.strip()
 
 
-def _substitute_labels(code: str, symbols: dict[str, int]) -> str:
-    """Replace label references with their numeric addresses.
+# Lines are assembled one statement at a time, so Keystone never sees label
+# definitions. Label references are replaced with numbers before assembling.
+# (Keystone's symbol-resolver hook would avoid that, but it encodes x86
+# relative jumps a few bytes off.) Most instructions take the label's
+# absolute address and Keystone works out the relative offset itself; the
+# exceptions are handled in _assemble_statement.
 
-    Lines are assembled one at a time, so Keystone never sees the label
-    definitions. Its symbol-resolver hook would cover that, but it encodes
-    x86 relative jumps off by a few bytes, whereas numeric targets are
-    encoded correctly. The first word of each `;`-separated statement is the
-    mnemonic and is left alone, so a label named e.g. `loop` still works.
-    """
+
+def _label_pattern(symbols: dict[str, int]) -> re.Pattern | None:
     if not symbols:
-        return code
-    names = re.compile(
-        r"(?<![\w.$])(" + "|".join(map(re.escape, sorted(symbols, key=len, reverse=True))) + r")(?![\w.$])"
-    )
-    statements = []
-    for stmt in code.split(";"):
-        m = re.match(r"\s*\S+", stmt)
-        head, rest = (stmt[: m.end()], stmt[m.end():]) if m else ("", stmt)
-        statements.append(head + names.sub(lambda n: hex(symbols[n.group(1)]), rest))
-    return ";".join(statements)
+        return None
+    names = "|".join(map(re.escape, sorted(symbols, key=len, reverse=True)))
+    return re.compile(rf"(?<![\w.$])({names})(?![\w.$])")
+
+
+def _num(value: int) -> str:
+    return hex(value) if value >= 0 else f"-{hex(-value)}"
+
+
+def _assemble_statement(ks, arch: Arch, stmt: str, pc: int, symbols, pattern) -> bytes:
+    # The mnemonic is left alone, so a label named e.g. `loop` still works.
+    m = re.match(r"\s*(\S+)", stmt)
+    head, operands = stmt[: m.end()], stmt[m.end():]
+    mnemonic = m.group(1).lower()
+
+    def asm(text: str, address: int) -> bytes:
+        encoding, _ = ks.asm(text, address)
+        return bytes(encoding or [])
+
+    def with_labels(value_of) -> str:
+        return head + pattern.sub(lambda n: _num(value_of(symbols[n.group(1)])), operands)
+
+    if not pattern or not pattern.search(operands):
+        return asm(stmt, pc)
+
+    if arch == "arm64" and mnemonic in ("adr", "adrp"):
+        # Keystone mis-encodes numeric adr/adrp targets at non-zero addresses.
+        # At address 0 an offset and an absolute target are the same number,
+        # so assemble there with the label replaced by its offset from pc.
+        if mnemonic == "adr":
+            return asm(with_labels(lambda t: t - pc), 0)
+        return asm(with_labels(lambda t: (t & ~0xFFF) - (pc & ~0xFFF)), 0)
+
+    if arch == "x64" and re.search(r"\brip\b", operands, re.IGNORECASE):
+        # [rip + label] needs the offset from the next instruction. The
+        # displacement is always 32-bit, so the size doesn't depend on it.
+        size = len(asm(with_labels(lambda t: 0), pc))
+        return asm(with_labels(lambda t: t - (pc + size)), pc)
+
+    return asm(with_labels(lambda t: t), pc)
 
 
 def _assemble_pass(arch: Arch, parsed, address: int, symbols: dict[str, int]):
     """Assemble each line at its running address, using the given label
     addresses. Returns per-line results and where each label landed."""
     ks = keystone.Ks(*KS_MODES[arch])
+    pattern = _label_pattern(symbols)
     current = address
     results, seen = [], {}
     for labels, code in parsed:
         for name in labels:
             seen[name] = current
         line = {"address": current if labels or code else None}
-        if not code:
-            results.append({**line, "ok": True, "bytes": ""})
-            continue
+        data = b""
         try:
-            encoding, _ = ks.asm(_substitute_labels(code, symbols), current)
+            for stmt in filter(str.strip, code.split(";")):
+                data += _assemble_statement(ks, arch, stmt, current + len(data), symbols, pattern)
         except keystone.KsError as e:
             results.append({**line, "ok": False, "error": str(e)})
             continue
-        data = bytes(encoding or [])
         results.append({**line, "ok": True, "bytes": data.hex(" ")})
         current += len(data)
     return results, seen
