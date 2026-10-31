@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #14161a; --panel: #1c1f25; --panel-focus: #1f232a; --border: #2c313a;
-    --text: #d7dae0; --muted: #7f8794; --error: #ff7b72; --ok: #7ee787;
+    --text: #d7dae0; --muted: #7f8794; --error: #ff7b72; --ok: #7ee787; --label: #e5c07b;
     --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
@@ -66,6 +66,11 @@
     user-select: none; flex: none;
   }
   .unknown { color: var(--error); opacity: .75; }
+  /* Only color changes here: bold or italic could change glyph widths and
+     knock the colored layer out of line with the textarea. */
+  .label { color: var(--label); }
+  .label-ref { color: var(--label); opacity: .75; }
+  .comment { color: var(--muted); }
 
   footer {
     padding: 6px 16px; border-top: 1px solid var(--border);
@@ -95,11 +100,16 @@
     <pre class="gutter" id="gutter" aria-hidden="true"></pre>
     <div class="editor">
       <pre id="asm-view" aria-hidden="true"></pre>
-      <textarea id="asm" spellcheck="false" autofocus>push rbp
-mov rbp, rsp
-xor eax, eax
-pop rbp
-ret</textarea>
+      <textarea id="asm" spellcheck="false" autofocus>main:
+    push rbp
+    mov rbp, rsp
+    xor eax, eax
+loop:
+    inc eax
+    cmp eax, 10
+    jl loop
+    pop rbp
+    ret</textarea>
     </div>
     </div>
   </section>
@@ -134,12 +144,67 @@ function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
 }
 
+const INDENT = "    ";
+const LABEL_DEF = /^(\s*)([A-Za-z_.$][\w.$]*)(\s*:)(?!:)/;
+const LABEL_ONLY = /^\s*([A-Za-z_.$][\w.$]*\s*:(?!:)\s*)+$/;
+
+function stripComment(line) {
+  const i = line.indexOf("//");
+  return i < 0 ? [line, ""] : [line.slice(0, i), line.slice(i)];
+}
+
+function definedLabels(lines) {
+  const names = new Set();
+  for (const line of lines) {
+    let [code] = stripComment(line), m;
+    while ((m = LABEL_DEF.exec(code))) {
+      names.add(m[2]);
+      code = code.slice(m[0].length);
+    }
+  }
+  return names;
+}
+
+function labelRefPattern(names) {
+  if (!names.size) return null;
+  const alts = [...names].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.$]/g, "\\$&"));
+  return new RegExp(`(?<![\\w.$])(?:${alts.join("|")})(?![\\w.$])`, "g");
+}
+
+function highlightRefs(text, pattern) {
+  if (!pattern) return escapeHtml(text);
+  let out = "", last = 0;
+  for (const m of text.matchAll(pattern)) {
+    out += escapeHtml(text.slice(last, m.index)) + `<span class="label-ref">${escapeHtml(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + escapeHtml(text.slice(last));
+}
+
+// Color label definitions, references to defined labels, and comments.
+function highlightAsm(line, refPattern) {
+  let [code, comment] = stripComment(line), m, html = "";
+  while ((m = LABEL_DEF.exec(code))) {
+    html += escapeHtml(m[1]) + `<span class="label">${escapeHtml(m[2])}</span>` + escapeHtml(m[3]);
+    code = code.slice(m[0].length);
+  }
+  // Skip the mnemonic of each statement, so a label named e.g. "loop" only
+  // lights up where it's used as an operand.
+  html += code.split(";").map((stmt) => {
+    const head = /^\s*\S*/.exec(stmt)[0];
+    return escapeHtml(head) + highlightRefs(stmt.slice(head.length), refPattern);
+  }).join(";");
+  if (comment) html += `<span class="comment">${escapeHtml(comment)}</span>`;
+  return html;
+}
+
 function render(pane) {
   const lines = pane.input.value.split("\n");
+  const refs = pane === panes.asm ? labelRefPattern(definedLabels(lines)) : null;
   pane.view.innerHTML = lines.map((line, i) => {
     const state = pane.states[i];
-    const html = escapeHtml(line);
-    return state && state !== "ok" ? `<span class="${state}">${html}</span>` : html;
+    if (state && state !== "ok") return `<span class="${state}">${escapeHtml(line)}</span>`;
+    return pane === panes.asm ? highlightAsm(line, refs) : escapeHtml(line);
   }).join("\n") + "\n";
   syncScroll(pane);
 }
@@ -199,7 +264,11 @@ async function convert() {
     const field = source === "asm" ? "bytes" : "text";
     from.states = r.lines.map((l) => (l.ok ? "ok" : "bad"));
     to.states = r.lines.map((l) => (l.ok ? "ok" : "unknown"));
-    to.input.value = r.lines.map((l) => (l.ok ? l[field] : "???")).join("\n");
+    to.input.value = r.lines.map((l) => {
+      const text = l.ok ? l[field] : "???";
+      // Disassembly has no labels, so indent every instruction to match.
+      return source === "hex" && text ? INDENT + text : text;
+    }).join("\n");
     addresses = r.lines.map((l) => l.address);
     render(from);
     render(to);
@@ -244,6 +313,40 @@ for (const [name, pane] of Object.entries(panes)) {
     if (other.input.scrollTop !== pane.input.scrollTop) other.input.scrollTop = pane.input.scrollTop;
   });
 }
+// Insert text at the cursor as if typed, so it stays in the undo history.
+function insertText(el, text) {
+  if (!document.execCommand("insertText", false, text)) {
+    el.setRangeText(text, el.selectionStart, el.selectionEnd, "end");
+    el.dispatchEvent(new Event("input"));
+  }
+}
+
+// Auto-indent: Enter after a label line indents the next line; otherwise the
+// next line keeps the current indent. Typing ":" after a lone word on an
+// indented line turns it into a label and moves it back to the left edge.
+panes.asm.input.addEventListener("keydown", (e) => {
+  if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+  const el = e.target, v = el.value, start = el.selectionStart;
+  const lineStart = v.lastIndexOf("\n", start - 1) + 1;
+  const before = v.slice(lineStart, start);
+
+  if (e.key === "Enter" && !e.shiftKey) {
+    const [code] = stripComment(before);
+    const indent = LABEL_ONLY.test(code) ? INDENT : /^[ \t]*/.exec(before)[0];
+    e.preventDefault();
+    insertText(el, "\n" + indent);
+  } else if (e.key === ":" && start === el.selectionEnd) {
+    const lineEnd = v.indexOf("\n", start);
+    const after = v.slice(start, lineEnd < 0 ? v.length : lineEnd);
+    const m = /^[ \t]+([A-Za-z_.$][\w.$]*)$/.exec(before);
+    if (m && !after.trim()) {
+      e.preventDefault();
+      el.setSelectionRange(lineStart, start);
+      insertText(el, m[1] + ":");
+    }
+  }
+});
+
 archEl.addEventListener("change", convert);
 addrEl.addEventListener("input", schedule);
 
