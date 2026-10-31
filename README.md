@@ -31,6 +31,12 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
   and all other non-blank lines are indented by two spaces. Backspace inside
   an indent joins the line onto the previous one. Assembly generated from
   bytes is indented the same way.
+- **Comments column.** A third column holds a free-form note for each line,
+  aligned to the assembly. Your code and notes are saved in the browser and
+  restored on reload. Notes are kept out of the assembler, but they travel
+  with export and import: exporting writes each note next to that line in the
+  file, and importing a file puts any per-line comments into the Comments
+  column (leaving the assembly clean).
 
 - **Byte highlighting.** The bar under the header takes a set of bytes to
   watch for (for example, bad characters for shellcode). Every occurrence in

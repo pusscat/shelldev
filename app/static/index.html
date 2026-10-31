@@ -64,9 +64,10 @@
   .hint { font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: auto; }
   main {
     flex: 1; min-height: 0;
-    display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border);
+    display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 1px; background: var(--border);
   }
-  @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 640px) { main { grid-template-columns: 1fr; } }
   .pane { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
   .pane h2 {
     margin: 0; padding: 6px 12px; font-size: 12px; font-weight: 600;
@@ -90,6 +91,8 @@
   }
   .editor textarea::selection { background: rgba(108, 182, 255, .35); }
   .editor:focus-within pre { background: var(--panel-focus); }
+  .editor textarea.plain { color: var(--text); background: var(--panel); caret-color: var(--text); }
+  .editor textarea.plain::placeholder { color: var(--muted); }
   .bad { color: var(--error); }
 
   .body { flex: 1; display: flex; min-height: 0; }
@@ -189,6 +192,12 @@ loop:
       <textarea id="hex" spellcheck="false"></textarea>
     </div>
   </section>
+  <section class="pane">
+    <h2>Comments <span class="hint">per line · saved in this browser</span></h2>
+    <div class="editor">
+      <textarea id="comments" class="plain" spellcheck="false" placeholder="notes for each line…"></textarea>
+    </div>
+  </section>
 </main>
 <footer id="status"></footer>
 <dialog id="import-dialog" aria-labelledby="import-title">
@@ -238,6 +247,9 @@ const panes = {
   asm: { input: $("asm"), view: $("asm-view"), states: [] },
   hex: { input: $("hex"), view: $("hex-view"), states: [] },
 };
+// The comments column is a free-text per-line annotation, aligned to the
+// assembly lines by index. It never affects assembly, bytes or addresses.
+const commentsEl = $("comments");
 
 // The side the user last typed in is the source; the other side is regenerated.
 let source = "asm";
@@ -435,6 +447,7 @@ async function convert() {
     render(to);
     renderGutter();
     report(r.lines);
+    saveSession();
   } catch (e) {
     if (id === requestId) setStatus(e.message, "error");
   }
@@ -474,12 +487,20 @@ for (const [name, pane] of Object.entries(panes)) {
   });
   pane.input.addEventListener("scroll", () => {
     syncScroll(pane);
-    if (name === "asm") gutterEl.scrollTop = pane.input.scrollTop;
-    // Keep the other side scrolled to the same lines.
-    const other = panes[name === "asm" ? "hex" : "asm"];
-    if (other.input.scrollTop !== pane.input.scrollTop) other.input.scrollTop = pane.input.scrollTop;
+    syncVScroll(pane.input);
   });
 }
+
+// All three columns and the address gutter scroll together, line for line.
+const vScrollEls = [panes.asm.input, panes.hex.input, commentsEl];
+function syncVScroll(src) {
+  for (const el of vScrollEls) {
+    if (el !== src && el.scrollTop !== src.scrollTop) el.scrollTop = src.scrollTop;
+  }
+  if (gutterEl.scrollTop !== src.scrollTop) gutterEl.scrollTop = src.scrollTop;
+}
+commentsEl.addEventListener("scroll", () => syncVScroll(commentsEl));
+commentsEl.addEventListener("input", saveSession);
 // Insert text at the cursor as if typed, so it stays in the undo history.
 function insertText(el, text) {
   if (!document.execCommand("insertText", false, text)) {
@@ -575,7 +596,7 @@ async function downloadExport() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         arch: archEl.value, address, format: exportFormatEl.value,
-        lines: panes.asm.input.value.split("\n"),
+        lines: mergedExportLines(),
       }),
     });
     if (!res.ok) {
@@ -594,6 +615,21 @@ async function downloadExport() {
   } finally {
     exportBtn.disabled = false;
   }
+}
+
+// Fold each line's note into the assembly as an inline // comment, so the
+// existing exporters carry it into the file next to that line's bytes.
+function mergedExportLines() {
+  const asm = panes.asm.input.value.split("\n");
+  const notes = commentsEl.value.split("\n");
+  return asm.map((line, i) => {
+    const note = (notes[i] || "").trim();
+    if (!note) return line;
+    const [code, inline] = stripComment(line);
+    const existing = inline.replace(/^\/\/\s*/, "").trim();
+    const text = existing ? `${existing} -- ${note}` : note;
+    return `${code.replace(/\s+$/, "")}  // ${text}`;
+  });
 }
 
 exportBtn.addEventListener("click", downloadExport);
@@ -675,21 +711,35 @@ importForm.addEventListener("submit", async (e) => {
   }
 });
 
-async function applyImport(arch, address, lines, notes) {
+// Imported comments go into the Comments column, not inline in the assembly.
+function splitImported(lines) {
+  const codes = [], notes = [];
+  for (const line of lines) {
+    const [code, inline] = stripComment(line);
+    codes.push(code.replace(/\s+$/, ""));
+    notes.push(inline.replace(/^\/\/\s*/, "").trim());
+  }
+  return { codes, notes };
+}
+
+async function applyImport(arch, address, lines, infoNotes) {
   archEl.value = arch;
   addrEl.value = "0x" + address.toString(16);
   updateExportLabel();
+  const { codes, notes } = splitImported(lines);
   // Replace the assembly as if typed, so Ctrl+Z brings the old code back.
   const el = panes.asm.input;
   el.focus();
   el.setSelectionRange(0, el.value.length);
-  insertText(el, lines.join("\n"));
+  insertText(el, codes.join("\n"));
   el.setSelectionRange(0, 0);
   el.scrollTop = 0;
+  commentsEl.value = notes.join("\n");
   clearTimeout(timer);
   source = "asm";
   await convert();
-  if (notes.length) setStatus(`${statusEl.textContent} · ${notes.join(" ")}`, statusEl.className);
+  saveSession();
+  if (infoNotes.length) setStatus(`${statusEl.textContent} · ${infoNotes.join(" ")}`, statusEl.className);
 }
 archEl.addEventListener("change", updateExportLabel);
 updateExportLabel();
@@ -726,26 +776,51 @@ try {
 hlEl.addEventListener("input", updateHighlight);
 updateHighlight();
 
+// The editor (code + notes + arch + address) is saved in this browser so a
+// reload restores it. A library pick takes precedence over the saved session.
+const SESSION_KEY = "shelldev.session";
+
+function saveSession() {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      arch: archEl.value, address: addrEl.value,
+      asm: panes.asm.input.value, comments: commentsEl.value,
+    }));
+  } catch {}
+}
+
+function restoreSession() {
+  let s;
+  try { s = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { return; }
+  if (!s || typeof s.asm !== "string") return;
+  if (["x86", "x64", "arm64"].includes(s.arch)) archEl.value = s.arch;
+  if (typeof s.address === "string" && s.address.trim()) addrEl.value = s.address;
+  panes.asm.input.value = s.asm;
+  commentsEl.value = typeof s.comments === "string" ? s.comments : "";
+}
+
 // A shellcode chosen on the library page arrives via localStorage.
 function loadPending() {
   let pending;
   try {
     const raw = localStorage.getItem("shelldev.load");
-    if (!raw) return;
+    if (!raw) return false;
     localStorage.removeItem("shelldev.load");
     pending = JSON.parse(raw);
-  } catch { return; }
-  if (!["x86", "x64", "arm64"].includes(pending.arch) || typeof pending.asm !== "string") return;
+  } catch { return false; }
+  if (!["x86", "x64", "arm64"].includes(pending.arch) || typeof pending.asm !== "string") return false;
   archEl.value = pending.arch;
   if (Number.isSafeInteger(pending.address) && pending.address >= 0) {
     addrEl.value = "0x" + pending.address.toString(16);
   }
   panes.asm.input.value = pending.asm;
+  commentsEl.value = "";
   updateExportLabel();
   if (pending.name) setStatus(`Loaded "${pending.name}" from the library`, "ok");
+  return true;
 }
 
-loadPending();
+if (!loadPending()) restoreSession();
 render(panes.asm);
 convert();
 </script>
