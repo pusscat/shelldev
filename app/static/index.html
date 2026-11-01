@@ -161,8 +161,8 @@
 <div class="bar">
   <label for="hl">Highlight bytes</label>
   <input id="hl" spellcheck="false" autocomplete="off"
-         placeholder="e.g. \x00\x0a 0x0d /bin/sh"
-         title="ASCII characters, \xNN or 0xNN. Spaces and commas separate entries; use \x20 for a space, \x2c for a comma, \\ for a backslash.">
+         placeholder="e.g. \x00\x0a 0x0d /bin/sh 0x80-0xff"
+         title="ASCII characters, \xNN or 0xNN, and inclusive ranges START-END (e.g. 0x41-0x51 or a-z). Spaces and commas separate entries; use \x20 for a space, \x2c for a comma, \x2d for a literal dash, \\ for a backslash.">
   <span id="hl-parsed"></span>
 </div>
 <main>
@@ -327,33 +327,70 @@ function highlightAsm(line, refPattern) {
 // Bytes the user asked to highlight in the bytes pane.
 let highlight = new Set();
 
-// Parse the highlight bar: ASCII characters, \xNN and 0xNN. Whitespace and
-// commas separate entries. Returns {bytes: Set} or {error}.
+// Parse the highlight bar: ASCII characters, \xNN and 0xNN, plus inclusive
+// ranges written START-END (e.g. 0x41-0x51 or a-z). Whitespace and commas
+// separate entries. Returns {bytes: Set} or {error}.
 function parseByteList(s) {
-  const bytes = new Set();
+  // First tokenize into byte values and range dashes. `-` is always the range
+  // operator here, so a literal "-" (0x2d) must be written \x2d or 0x2d.
+  const tokens = [];
   let i = 0, m;
   while (i < s.length) {
     const rest = s.slice(i);
     if ((m = /^\\x([0-9a-f]{2})/i.exec(rest)) || (m = /^0x([0-9a-f]{1,2})(?![0-9a-f])/i.exec(rest))) {
-      bytes.add(parseInt(m[1], 16));
+      tokens.push({ value: parseInt(m[1], 16) });
       i += m[0].length;
     } else if (/^0x[0-9a-f]/i.test(rest)) {
       return { error: "0x takes one or two hex digits" };
     } else if (rest.startsWith("\\\\")) {
-      bytes.add(0x5c);
+      tokens.push({ value: 0x5c });
       i += 2;
     } else if (rest[0] === "\\") {
       return { error: "After \\ use xNN, or \\\\ for a backslash" };
+    } else if (rest[0] === "-") {
+      tokens.push({ dash: true });
+      i++;
     } else if (/[\s,]/.test(rest[0])) {
       i++;
     } else {
       const c = s.charCodeAt(i);
       if (c < 0x20 || c > 0x7e) return { error: `"${rest[0]}" is not printable ASCII` };
-      bytes.add(c);
+      tokens.push({ value: c });
       i++;
     }
   }
+  // Then fold "value - value" into inclusive ranges.
+  const hex = (b) => "0x" + b.toString(16).padStart(2, "0");
+  const bytes = new Set();
+  for (let j = 0; j < tokens.length; j++) {
+    const t = tokens[j];
+    if (t.dash) return { error: "Use START-END for a range, e.g. 0x41-0x51 (a literal - is 0x2d)" };
+    const end = tokens[j + 1]?.dash ? tokens[j + 2] : null;
+    if (tokens[j + 1]?.dash && (!end || end.dash)) return { error: "A range needs an end value, e.g. 0x41-0x51" };
+    if (end) {
+      if (t.value > end.value) return { error: `Range ${hex(t.value)}-${hex(end.value)} is backwards` };
+      for (let b = t.value; b <= end.value; b++) bytes.add(b);
+      j += 2;
+    } else {
+      bytes.add(t.value);
+    }
+  }
   return { bytes };
+}
+
+// A sorted byte set as a compact string, folding consecutive runs back into
+// "lo-hi" so a wide range doesn't print every byte.
+function formatByteSet(set) {
+  const xs = [...set].sort((a, b) => a - b);
+  const h = (b) => b.toString(16).padStart(2, "0");
+  const out = [];
+  for (let i = 0; i < xs.length; i++) {
+    let j = i;
+    while (j + 1 < xs.length && xs[j + 1] === xs[j] + 1) j++;
+    out.push(j > i ? `${h(xs[i])}-${h(xs[j])}` : h(xs[i]));
+    i = j;
+  }
+  return out.join(" ");
 }
 
 // One byte in the bytes pane, in any accepted form: "48", "0x48" or "\x48".
@@ -767,8 +804,7 @@ function updateHighlight() {
     return; // keep the last valid set while the user fixes the input
   }
   highlight = r.bytes;
-  hlParsedEl.textContent = [...highlight].sort((a, b) => a - b)
-    .map((b) => b.toString(16).padStart(2, "0")).join(" ");
+  hlParsedEl.textContent = formatByteSet(highlight);
   try { localStorage.setItem(HL_KEY, hlEl.value); } catch {}
   render(panes.hex);
   if (lastLines.length) report(lastLines);
