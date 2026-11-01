@@ -13,7 +13,7 @@ files can't be checked reliably for that.
 
 import re
 
-from .engine import LABEL, MAX_LINES, Arch, assemble_lines, disassemble_blob, split_line
+from .engine import LABEL, MAX_LINES, Arch, assemble_lines, disassemble_blob, parse_int, split_line
 
 INDENT = "  "
 MAX_BINARY = 64 * 1024
@@ -159,22 +159,7 @@ def _split_comment(line: str, markers: tuple[str, ...]) -> tuple[str, str]:
     return line, ""
 
 
-def _nasm_number(token: str) -> int | None:
-    t = token.strip().lower().replace("_", "")
-    try:
-        if re.fullmatch(r"-?(0x|\$)[0-9a-f]+", t):
-            return int(t.replace("$", "0x"), 16)
-        if re.fullmatch(r"-?[0-9][0-9a-f]*h", t):
-            return int(t[:-1], 16)
-        if re.fullmatch(r"-?(0b[01]+|[01]+b)", t):
-            return int(t.replace("0b", "").rstrip("b"), 2)
-        if re.fullmatch(r"-?(0o[0-7]+|[0-7]+[oq])", t):
-            return int(t.replace("0o", "").rstrip("oq"), 8)
-        if re.fullmatch(r"-?\d+", t):
-            return int(t)
-    except ValueError:
-        pass
-    return None
+_nasm_number = parse_int  # NASM integer forms; shared with the engine.
 
 
 DATA_SIZES = {"db": 1, "dw": 2, "dd": 4, "dq": 8}

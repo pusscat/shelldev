@@ -115,6 +115,12 @@ Supports **x86 (32-bit)**, **x64** and **ARM64**.
 
 - Comments start with `//` on every architecture.
 - `;` separates multiple instructions on one line (`nop; ret`).
+- Inline data: `db` emits raw bytes, `dw`/`dd`/`dq` emit 2/4/8-byte
+  little-endian values. Operands are numbers and/or quoted strings separated
+  by commas or spaces, so `db 0x41, 0x42`, `db 0x41 0x42` and
+  `db "./flag.txt", 0x0a` all work. Strings are taken literally (as in NASM's
+  `''`/`""` — there are no `\n`-style escapes, so write a newline as a byte:
+  `db "line", 0x0a`). Keystone's own `.byte`/`.ascii`/`.asciz` work too.
 - Bytes can be written as `55 48 89 e5`, `\x55\x48`, or `0x55, 0x48`.
 - Label names start with a letter, `_`, `.` or `$`; numeric local labels
   (`1:`, `1b`, `1f`) are not supported.

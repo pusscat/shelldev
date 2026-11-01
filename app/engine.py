@@ -32,14 +32,133 @@ MAX_PASSES = 10
 LABEL = re.compile(r"^\s*([A-Za-z_.$][\w.$]*)\s*:(?!:)")
 
 
+def strip_comment(code: str) -> str:
+    """Drop a trailing `//` comment, ignoring `//` inside a quoted string
+    (so `db "http://x"` keeps its string)."""
+    quote = None
+    i = 0
+    while i < len(code):
+        c = code[i]
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+        elif c == "/" and code[i + 1:i + 2] == "/":
+            return code[:i]
+        i += 1
+    return code
+
+
+def split_statements(code: str) -> list[str]:
+    """Split a line into `;`-separated statements, ignoring `;` inside a
+    quoted string (so `db "a;b"` stays one statement)."""
+    out, buf, quote = [], [], None
+    for c in code:
+        if quote:
+            buf.append(c)
+            if c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+            buf.append(c)
+        elif c == ";":
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(c)
+    out.append("".join(buf))
+    return out
+
+
 def split_line(line: str) -> tuple[list[str], str]:
     """Strip a `//` comment and leading `label:` definitions."""
-    code = line.split("//", 1)[0]
+    code = strip_comment(line)
     labels = []
     while m := LABEL.match(code):
         labels.append(m.group(1))
         code = code[m.end():]
     return labels, code.strip()
+
+
+def parse_int(token: str) -> int | None:
+    """An integer written in any of NASM's forms (`0x1f`, `$1f`, `1fh`, `0b11`,
+    `0o17`/`17q`, decimal), with an optional leading `-`, or None."""
+    t = token.strip().lower().replace("_", "")
+    try:
+        if re.fullmatch(r"-?(0x|\$)[0-9a-f]+", t):
+            return int(t.replace("$", "0x"), 16)
+        if re.fullmatch(r"-?[0-9][0-9a-f]*h", t):
+            return int(t[:-1], 16)
+        if re.fullmatch(r"-?(0b[01]+|[01]+b)", t):
+            return int(t.replace("0b", "").rstrip("b"), 2)
+        if re.fullmatch(r"-?(0o[0-7]+|[0-7]+[oq])", t):
+            return int(t.replace("0o", "").rstrip("oq"), 8)
+        if re.fullmatch(r"-?\d+", t):
+            return int(t)
+    except ValueError:
+        pass
+    return None
+
+
+# `db`/`dw`/`dd`/`dq`: inline data, assembled straight to bytes (Keystone's
+# LLVM syntax has no `db`, only `.byte`/`.ascii`). Operands are numbers and/or
+# quoted strings, separated by commas and/or whitespace, so both NASM's
+# `db 0x41, 0x42` and a bare `db 0x41 0x42` work. Strings are taken literally
+# (no `\n` escapes, as in NASM's '' and "" — write a byte as `db "x", 0x0a`).
+DATA_DIRECTIVE = re.compile(r"^\s*(db|dw|dd|dq)\b", re.IGNORECASE)
+DATA_WIDTH = {"db": 1, "dw": 2, "dd": 4, "dq": 8}
+
+
+class DataError(Exception):
+    """A malformed `db`/`dw`/`dd`/`dq` operand."""
+
+
+def split_data_operands(operands: str) -> list[str]:
+    """Split data operands into items: each a quoted string (kept whole, with
+    its opening quote) or a bare value. Commas and whitespace separate."""
+    tokens, buf, quote = [], "", None
+    for c in operands:
+        if quote:
+            buf += c
+            if c == quote:
+                tokens.append(buf)
+                buf, quote = "", None
+        elif c in "'\"`":
+            if buf.strip():
+                tokens.append(buf)
+            buf, quote = c, c
+        elif c in ", \t":
+            if buf.strip():
+                tokens.append(buf)
+            buf = ""
+        else:
+            buf += c
+    if quote:
+        raise DataError("unterminated string")
+    if buf.strip():
+        tokens.append(buf)
+    return tokens
+
+
+def assemble_data(width: int, operands: str) -> bytes:
+    """Bytes for a `db`/`dw`/`dd`/`dq` operand list. Each value is stored
+    little-endian in `width` bytes; each string's bytes are padded up to a
+    multiple of `width` (no padding for `db`)."""
+    tokens = split_data_operands(operands)
+    if not tokens:
+        raise DataError("no data")
+    out = bytearray()
+    for tok in tokens:
+        if tok[:1] in "'\"`":
+            raw = tok[1:-1].encode("utf-8")
+            out += raw + b"\0" * (-len(raw) % width)
+            continue
+        n = parse_int(tok)
+        if n is None:
+            raise DataError(f"invalid value: {tok}")
+        out += (n % (1 << (8 * width))).to_bytes(width, "little")
+    return bytes(out)
 
 
 # Lines are assembled one statement at a time, so Keystone never sees label
@@ -62,6 +181,11 @@ def _num(value: int) -> str:
 
 
 def _assemble_statement(ks, arch: Arch, stmt: str, pc: int, symbols, pattern) -> bytes:
+    # Inline data (db/dw/dd/dq) is assembled straight to bytes, before the
+    # mnemonic is even looked at, since Keystone doesn't know these directives.
+    if dm := DATA_DIRECTIVE.match(stmt):
+        return assemble_data(DATA_WIDTH[dm.group(1).lower()], stmt[dm.end():])
+
     # The mnemonic is left alone, so a label named e.g. `loop` still works.
     m = re.match(r"\s*(\S+)", stmt)
     head, operands = stmt[: m.end()], stmt[m.end():]
@@ -116,11 +240,11 @@ def _assemble_pass(arch: Arch, parsed, address: int, symbols: dict[str, int]):
         line = {"address": current if labels or code else None}
         data, parts = b"", []
         try:
-            for stmt in filter(str.strip, code.split(";")):
+            for stmt in filter(str.strip, split_statements(code)):
                 encoded = _assemble_statement(ks, arch, stmt, current + len(data), symbols, pattern)
                 parts.append((stmt.strip(), encoded))
                 data += encoded
-        except keystone.KsError as e:
+        except (keystone.KsError, DataError) as e:
             results.append({**line, "ok": False, "error": str(e)})
             continue
         # "parts" (each statement and its bytes) is used by export, not sent.

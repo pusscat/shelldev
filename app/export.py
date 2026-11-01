@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .engine import DATA_DIRECTIVE, DATA_WIDTH, DataError, parse_int, split_data_operands
+
 ARCH_NAMES = {"x86": "x86 (32-bit)", "x64": "x64", "arm64": "ARM64"}
 
 
@@ -82,9 +84,40 @@ NASM_TIMEOUT = 10
 NASM_MAX_RUNS = 50
 
 
+def _nasm_data_statement(width: int, mnemonic: str, operands: str) -> str | None:
+    """Re-render a `db`/`dw`/`dd`/`dq` operand list in native NASM syntax,
+    keeping strings as strings, or None to fall back to raw bytes. The caller
+    assembles the result with NASM and compares bytes, so an operand NASM would
+    read differently is caught there and demoted anyway."""
+    try:
+        tokens = split_data_operands(operands)
+    except DataError:
+        return None
+    pieces = []
+    for tok in tokens:
+        if tok[:1] in "'\"`":
+            raw = tok[1:-1]  # engine reads all quotes literally
+            # Re-quote literally (not backtick: NASM processes escapes there).
+            if '"' not in raw:
+                pieces.append(f'"{raw}"')
+            elif "'" not in raw:
+                pieces.append(f"'{raw}'")
+            else:
+                return None
+        else:
+            n = parse_int(tok)
+            if n is None:
+                return None
+            pieces.append(hex(n % (1 << (8 * width))))
+    return f"{mnemonic} " + ", ".join(pieces) if pieces else None
+
+
 def _nasm_statement(stmt: str) -> str | None:
     """Translate a Keystone (Intel/LLVM) statement to NASM syntax, or None
     if it should be emitted as raw bytes instead."""
+    if dm := DATA_DIRECTIVE.match(stmt):
+        m = dm.group(1).lower()
+        return _nasm_data_statement(DATA_WIDTH[m], m, stmt[dm.end():])
     # Directives differ between assemblers, and quotes, % and \ could reach
     # NASM's preprocessor (e.g. %include), so those always become bytes.
     if stmt.startswith(".") or re.search(r"[%\"'`\\]", stmt):

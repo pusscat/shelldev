@@ -264,9 +264,17 @@ const INDENT = "  ";
 const LABEL_DEF = /^(\s*)([A-Za-z_.$][\w.$]*)(\s*:)(?!:)/;
 const LABEL_ONLY = /^\s*([A-Za-z_.$][\w.$]*\s*:(?!:)\s*)+$/;
 
+// Split off a // comment, ignoring // inside a quoted string (so a line like
+// db "http://x" keeps its string). Mirrors engine.strip_comment on the server.
 function stripComment(line) {
-  const i = line.indexOf("//");
-  return i < 0 ? [line, ""] : [line.slice(0, i), line.slice(i)];
+  let quote = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) { if (c === quote) quote = null; }
+    else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "/" && line[i + 1] === "/") return [line.slice(0, i), line.slice(i)];
+  }
+  return [line, ""];
 }
 
 function definedLabels(lines) {
